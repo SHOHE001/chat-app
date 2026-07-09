@@ -1,0 +1,18 @@
+{
+  "framework": "node:test",
+  "command": "node --test",
+  "total": 36,
+  "pass": 36,
+  "fail": 0,
+  "skipped": 0,
+  "test_file": "tests/deploy.test.js",
+  "test_ids": ["T01", "T02_boundary", "T03_boundary", "T04", "T05_boundary", "T05b_boundary", "T06"],
+  "manual_check_required": true,
+  "manual_notes": "responsive のブラウザ実測は gen8 に playwright/chromium ドライバが無く未実施（html,body overflow-x:hidden の防御ガードで対応）。systemd 実インストールは無人セッションでは未実施（unit テンプレートは静的検証済み）。",
+  "verified_by_orchestrator": {
+    "fail_fast_port_0": "PORT=0 → 明示エラー exit 1",
+    "cwd_independent_static": "/tmp から起動して GET / //style.css //app.js すべて HTTP 200、DB は絶対 DB_PATH に生成",
+    "env_file_if_exists_flag": "Node 22.22.3 に存在（node --help 確認）",
+    "env_precedence": "OS env が .env を上書きしないことを実測（README 記載）"
+  }
+}

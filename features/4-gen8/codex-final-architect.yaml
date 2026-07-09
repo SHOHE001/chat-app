@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: architect
+summary: |
+  critical/high に相当するアーキテクチャ不整合は見つかりません。env 解決の抽出、staticDir のモジュール相対化、systemd テンプレート、README 追加は plan の境界内に収まっています。
+findings:
+  - severity: medium
+    title: "README の systemd EnvironmentFile 優先順位説明が実装保証より強い"
+    detail: |
+      README は `EnvironmentFile` も OS/systemd 既存値を上書きしないと説明していますが、systemd の環境合成は unit 内の `Environment=` / `EnvironmentFile=` の指定順や manager 環境との関係で読み手が誤解しやすい領域です。コード側の設計は `.env` ロードを起動系へ寄せるだけなので、README が Node の `--env-file-if-exists` と systemd を同一挙動として断定すると運用時の原因切り分けを難しくします。
+    suggestion: |
+      README では Node の実測結果と systemd の `EnvironmentFile` 利用方針を分けて書き、systemd 側は「この unit では EnvironmentFile から注入する」程度に留めるか、参照する systemd 優先順位を正確に明記してください。
+    file: "README.md"
+    line: 68
+  - severity: medium
+    title: "HOST / DB_PATH の空白値が正規化されない"
+    detail: |
+      `PORT` は trim して空白のみを既定値へ戻しますが、`HOST='   '` や `DB_PATH='   '` はそのまま有効値として扱われます。env ファイル編集時の退化入力に対して設定解決の規則が非対称で、`listen` の失敗や意図しないパス作成につながります。
+    suggestion: |
+      `PORT` と同様に `HOST` / `DB_PATH` も `String(value).trim()` ベースで空白のみを未設定扱いにするか、少なくとも README とテストで空白値の扱いを明示してください。
+    file: "src/server.js"
+    line: 210
+  - severity: low
+    title: "admin 回帰テストの staticDir が本番起動経路とずれている"
+    detail: |
+      `startServer` は `staticDir: 'public'` を渡しており、今回の主変更であるモジュール相対の staticDir 解決をテストしていません。admin 回帰には十分ですが、deploy 系テスト名の中に置くと staticDir の CWD 非依存も検証済みのように見えます。
+    suggestion: |
+      main-module 起動の結合テストまでは不要でも、staticDir 解決ヘルパーを切り出して単体テストするか、このテストは admin 回帰に限定した名前にしてください。
+    file: "tests/deploy.test.js"
+    line: 23

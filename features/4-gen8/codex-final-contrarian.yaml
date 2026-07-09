@@ -1,0 +1,38 @@
+verdict: fail
+blocking: 1
+persona: contrarian
+summary: |
+  env 化自体は概ね計画どおりですが、README の systemd 環境変数優先順位が実装・運用上危険な誤説明になっています。これを信じると本番の上書き優先度を逆に理解し、移行時や緊急変更時に意図しない設定で起動する可能性があります。
+findings:
+  - severity: high
+    title: "systemd EnvironmentFile の優先順位説明が逆で運用ミスを誘発する"
+    detail: |
+      README は「systemd の EnvironmentFile も既に設定済みの変数は上書きしない」「OS/systemd 環境変数 > .env」と説明していますが、systemd では同一 unit 内の EnvironmentFile は Environment= 等と同じ環境リストに取り込まれ、後に評価される設定が前を上書きします。少なくともこの unit では EnvironmentFile=-__INSTALL_DIR__/.env が ExecStart 前に読み込まれるため、README の“未設定値のみ補完”モデルで運用すると、.env の値が想定より強く効くケースを見落とします。デプロイ手順の中核なので、誤った優先順位は本番 PORT/HOST/DB_PATH/ADMIN_PASSWORD の取り違えにつながります。
+    suggestion: |
+      README の優先順位節を Node の --env-file-if-exists と systemd EnvironmentFile で分けて書き直してください。systemd 側は、unit 内での Environment=/EnvironmentFile= の順序と上書き挙動を明示し、必要なら EnvironmentFile より後に Environment= を置く、または override.conf の扱いを具体化してください。
+    file: "README.md"
+    line: 69
+  - severity: medium
+    title: "HOST/DB_PATH の空白値が未設定扱いにならない"
+    detail: |
+      resolveConfig は PORT だけ trim していますが、HOST と DB_PATH は空文字のみを既定値に戻します。そのため .env に HOST=   や DB_PATH=   のような値が入ると、HOST は listen 時に不正ホストとして落ち、DB_PATH は空白名の相対ファイル/ディレクトリとして扱われます。.env 手編集を前提にするなら PORT と同じ入力正規化方針に寄せた方が事故が少ないです。
+    suggestion: |
+      HOST と DB_PATH も String(value).trim() で判定し、空白のみは既定値にフォールバックするか、明示エラーにしてください。
+    file: "src/server.js"
+    line: 211
+  - severity: medium
+    title: "モバイル対応が overflow-x:hidden のみで、横はみ出しを検出不能にしている"
+    detail: |
+      public/style.css への変更は html/body の overflow-x:hidden だけです。これは横スクロールを発生させる要素を修正するのではなく隠すため、ドロワーや長いテキスト、固定幅要素のはみ出しをユーザーがスクロールで確認できなくなります。In-Scope の“スマホ幅の表示崩れがない”に対して、原因を潰した証拠になりません。
+    suggestion: |
+      少なくとも 400px 幅で主要画面の scrollWidth/clientWidth を検査する一回限りの確認ログを残すか、長い room/thread 名・入力欄・drawer 開閉状態など、はみ出しやすい要素に対して min-width:0 / overflow-wrap / max-width の局所対策を追加してください。
+    file: "public/style.css"
+    line: 8
+  - severity: low
+    title: "admin 回帰テストが WebSocket close を待たずに server を閉じる"
+    detail: |
+      T06 は client.close() 後に close イベントを待たず、finally で server close に進みます。現状は通っていますが、失敗時に open handle や順序依存の flaky test になりやすい形です。
+    suggestion: |
+      client.close() の後に once('close') を await する helper を追加し、各ケースで接続終了を待ってから stopServer してください。
+    file: "tests/deploy.test.js"
+    line: 108

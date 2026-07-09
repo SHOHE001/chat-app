@@ -1,0 +1,15 @@
+# Subtest: T38_thread_root_id_null_compat threadRootId:nullを明示送信すると通常のタイムライン投稿としてbroadcastされthread_root_idがnullでエラーにならない
+ok 36 - T38_thread_root_id_null_compat threadRootId:nullを明示送信すると通常のタイムライン投稿としてbroadcastされthread_root_idがnullでエラーにならない
+  ---
+  duration_ms: 199.543693
+  type: 'test'
+  ...
+1..36
+# tests 36
+# suites 0
+# pass 36
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6131.700928

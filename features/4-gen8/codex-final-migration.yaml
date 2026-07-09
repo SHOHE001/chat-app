@@ -1,0 +1,30 @@
+verdict: fail
+blocking: 2
+persona: migration
+summary: |
+  env 化とテスト追加自体は概ね計画に沿っていますが、既存の待受互換性と運用ドキュメントの環境変数優先順位に後方互換上の問題があります。特に IPv6/localhost 経由の既存利用者が切れる可能性はリリース前に潰すべきです。
+findings:
+  - severity: high
+    title: "既定 HOST=0.0.0.0 により IPv6 待受の後方互換が失われる"
+    detail: |
+      従来の `app.server.listen(PORT)` は host 未指定で、Node は環境によって IPv6 any address (`::`) で待受し、IPv4 も dual-stack で受けられる構成になり得ます。今回 `host` の既定値を `0.0.0.0` に固定して `listen(port, host)` に変更したため、IPv6 (`::1` や IPv6 の公開アドレス) で接続していた既存クライアントが到達不能になります。plan は「現状 listen(PORT) は全 interface bind。挙動を保ちつつ」としているため、これは migration 観点では互換性破壊です。
+    suggestion: |
+      既定では host を `undefined` にして従来の `listen(port)` 相当を維持し、HOST が明示された時だけ `listen(port, host)` に分岐してください。README/.env.example の既定表示もその挙動に合わせるか、IPv6 非対応化を明示して移行注意を書いてください。
+    file: "src/server.js"
+    line: 495
+  - severity: high
+    title: "README の systemd EnvironmentFile 優先順位説明が誤っており移行時に設定が意図せず上書きされる"
+    detail: |
+      README は `systemd の EnvironmentFile も既に設定済みの変数は上書きしない` と説明していますが、systemd では `EnvironmentFile=` は unit の `Environment=` 等と合成され、指定順・設定元によって後から読まれた値が上書きできます。少なくとも Node の `--env-file-if-exists` と同じ「未設定のみ補完」と扱うのは危険です。gen8/綾瀬移行時に unit 側で設定した `PORT` や `DB_PATH` が `.env` によって上書きされる、またはその逆を誤認する運用事故につながります。
+    suggestion: |
+      README の優先順位説明を systemd と npm start で分け、systemd では `EnvironmentFile` と `Environment` の実際の優先順位を明記してください。必要なら unit テンプレート側も、上書き方針が明確になる順序に調整してください。
+    file: "README.md"
+    line: 67
+  - severity: medium
+    title: "HOST/DB_PATH の空白値が未設定扱いにならず起動失敗や不自然な DB 作成を招く"
+    detail: |
+      `PORT` は trim されていますが、`HOST` と `DB_PATH` は空文字だけを既定値扱いにしており、`.env` に `HOST=   ` や `DB_PATH=   ` が入るとそのまま採用されます。HOST は listen の EINVAL、DB_PATH は空白名ファイル作成など、移行時の設定ミスが分かりにくい挙動になります。
+    suggestion: |
+      PORT と同様に `String(value).trim()` を使い、空白のみは未設定扱いにするか、明示エラーにしてください。
+    file: "src/server.js"
+    line: 211

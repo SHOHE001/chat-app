@@ -1,0 +1,25 @@
+{
+  "created_at": "2026-07-09T19:09:11.048Z",
+  "issue": 4,
+  "slug": "gen8",
+  "phases": {
+    "design_review": "passed",
+    "acceptance_skeleton": "passed",
+    "core_impl": "pending",
+    "glm_impl": "pending",
+    "final_review": "pending",
+    "codex_review": "pending",
+    "merge": "pending"
+  },
+  "loops": {
+    "design_loops": 0,
+    "codex_loops": 0,
+    "glm_runs": 0,
+    "impl_loops": 1
+  },
+  "raised_issues": [],
+  "design_review": "passed",
+  "updated_at": "2026-07-09T19:39:02.267Z",
+  "core_impl": "passed",
+  "final_review": "passed"
+}

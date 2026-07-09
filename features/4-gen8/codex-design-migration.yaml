@@ -1,0 +1,41 @@
+verdict: fail
+blocking: 1
+persona: migration
+summary: |
+  移行観点では、既存の `PORT` 指定方法を一部破壊する可能性が計画内で処理されていません。その他は主に検証不足・後方互換テスト不足で、実装前に明文化すれば潰せる範囲です。
+findings:
+  - severity: high
+    title: "PORT の既存互換性が壊れる入力を扱っていない"
+    detail: |
+      既存コードは `process.env.PORT ?? 3000` をそのまま `listen(PORT)` に渡しており、Node の `server.listen(path)` として Unix domain socket 文字列も成立し得ます。計画では `Number(portRaw)` に正規化するため、既存利用者が `PORT=/tmp/chat.sock` のような文字列ポートを使っていた場合 `NaN` になり起動不能になります。また `PORT='abc'` や `PORT='3000 '` の扱いも仕様化されておらず、移行時の失敗モードが不明です。
+    suggestion: |
+      既存互換を維持するなら `PORT` は数値文字列のみ数値化し、それ以外は明示エラーにするか、旧挙動どおり文字列 listen を許容するかを決めてテストに追加してください。少なくとも invalid PORT の期待値とエラーメッセージを設計に含めるべきです。
+    file: "src/server.js"
+  - severity: medium
+    title: "`.env` と systemd `EnvironmentFile` の相互運用が未検証"
+    detail: |
+      計画は `.env.example` を `process.loadEnvFile` と systemd `EnvironmentFile` の両方で読める前提にしていますが、コメント、空値、クオート、スペースを含む値の扱いが一致するかをテスト計画で確認していません。特に `ADMIN_PASSWORD=` の空値が systemd 側でどう注入され、`process.loadEnvFile` の結果と同じになるかは後方互換上重要です。
+    suggestion: |
+      `.env.example` を実際に `process.loadEnvFile` で読み込むテストと、README で許容構文を明記してください。systemd 側は自動テストが難しければ、空値・コメント・クオート禁止を明確に制約として書いてください。
+    file: ".env.example"
+  - severity: medium
+    title: "DB_PATH の相対パス基準変更リスクが README 依存になっている"
+    detail: |
+      設計では `DB_PATH=data/chat.db` の相対パスは起動時 CWD 基準としています。一方で `staticDir` は CWD 非依存に変更されるため、同じ起動方法の違いで DB だけ配置先が変わり続けます。既存ユーザーが別 CWD から `node /path/to/src/server.js` していた場合、DB の場所は従来通り CWD 相対ですが、移行手順としてその互換性とリスクが明示されていません。
+    suggestion: |
+      `DB_PATH` は互換維持のため CWD 相対であることを README とテスト名に明示し、systemd の `WorkingDirectory` が DB 保存場所を決めることも移行手順に含めてください。
+    file: "src/server.js"
+  - severity: medium
+    title: "既存 admin 無効挙動の回帰テストが不足している"
+    detail: |
+      計画は `ADMIN_PASSWORD=''` の単体テストだけで、既存サーバー挙動である「未設定時に管理者昇格できない」「設定時だけ既存合言葉で昇格できる」まで確認していません。設定抽出の変更は public API ではないものの、管理者機能の有効/無効は既存利用者に見える挙動です。
+    suggestion: |
+      `createChatServer` または HTTP/WebSocket 経由の既存テストに、未設定・空文字・設定ありの admin 挙動を少なくとも 1 件追加してください。
+    file: "tests/deploy.test.js"
+  - severity: low
+    title: "README 全面刷新は既存手順の喪失リスクがある"
+    detail: |
+      実装対象に `README.md（全面刷新）` とありますが、既存 README の内容を保持・移植する条件がありません。移行レビューとしては、既存のセットアップ、テスト、開発起動手順が消えると既存利用者の導線が壊れます。
+    suggestion: |
+      全面刷新する場合も、既存 README のセクションを棚卸しして、削除する項目と移植する項目を実装チェックリストに含めてください。
+    file: "README.md"

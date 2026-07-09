@@ -1,0 +1,41 @@
+verdict: fail
+blocking: 1
+persona: contrarian
+summary: |
+  常駐化と env 化の方向性は Issue に沿っていますが、`PORT` の扱いが未検証で、設定ミス時に systemd が即クラッシュループする具体的な失敗経路があります。その他は主に過剰設計・文書化不足レベルです。
+findings:
+  - severity: high
+    title: "`PORT` の数値化に失敗した場合の起動失敗が未設計"
+    detail: |
+      `resolveConfig` は `Number(portRaw)` の結果をそのまま `server.listen(port, host)` に渡すため、`PORT=abc` や `PORT=3000x` で `NaN` になり、Node の listen が RangeError/TypeError を投げて systemd の `Restart=always` によりクラッシュループします。これはデプロイ設定の typo だけで常駐起動の完了条件を満たせなくなる具体的な可用性バグです。境界テストも未設定・空文字のみで、不正値や範囲外値を検出していません。
+    suggestion: |
+      `PORT` は整数かつ 1-65535 の範囲に検証し、不正なら明示的なエラーメッセージで fail fast するか既定値へフォールバックする方針を plan に書いてください。テストに `PORT=abc`、`PORT=0`、`PORT=65536` などを追加してください。
+    file: "src/server.js"
+  - severity: medium
+    title: "`.env` 自動ロードは必要性に比べて挙動差のリスクが大きい"
+    detail: |
+      systemd では `EnvironmentFile`、ローカルでは `process.loadEnvFile` という二重経路になっており、どちらの値が優先されるか、既存のシェル環境変数を上書きするかが plan 上で明示されていません。より単純には systemd/シェルとも環境変数注入に寄せ、ローカルだけ `node --env-file=.env src/server.js` または npm script で扱えば、アプリ本体からファイル探索とロード処理を消せます。
+    suggestion: |
+      アプリコードで `.env` を読む必要がある理由を明確化するか、起動コマンド側に `.env` 処理を寄せる案を比較してください。残す場合は OS env と `.env` の優先順位を明記し、テスト対象にしてください。
+    file: "src/server.js"
+  - severity: medium
+    title: "`EnvironmentFile` が必須扱いで、`.env` 未作成時に systemd 起動が失敗する"
+    detail: |
+      unit の `EnvironmentFile=__INSTALL_DIR__/.env` はファイルが存在しないと service 起動に失敗します。一方で plan は `.env` ロードを「存在時のみ」としており、ローカル実行では `.env` なしを許容しています。この差分は、README 手順を一つ飛ばしただけで gen8 の常駐起動が失敗する原因になります。
+    suggestion: |
+      `.env` を必須成果物として扱うならその前提を明記し、README の systemd 手順に作成チェックを入れてください。任意にしたいなら systemd では `EnvironmentFile=-__INSTALL_DIR__/.env` を検討してください。
+    file: "deploy/chat-app.service"
+  - severity: medium
+    title: "レスポンシブ対応が実測依存だけで、完了判定が曖昧"
+    detail: |
+      「実際に崩れる箇所のみ」「想定候補」となっており、何をもって 400px 幅で崩れなしと判定するかが具体化されていません。スクリーンショットを撮るだけでは、横スクロール、入力欄の欠け、モーダル/サイドバーの重なりなどの退化を自動検出できません。
+    suggestion: |
+      Playwright で 360px の主要画面について `document.documentElement.scrollWidth <= window.innerWidth`、主要ボタン/入力の可視性、送信フォームの操作可否を検査する境界テストを追加してください。
+    file: "public/style.css"
+  - severity: low
+    title: "README 全面刷新は差分リスクが高い"
+    detail: |
+      Issue の完了条件には README 更新が必要ですが、全面刷新は既存の有用な情報を消すリスクがあります。contrarian には、必要セクションの追記・再編だけで足りるように見えます。
+    suggestion: |
+      既存 README の内容を保持する前提で、セットアップ/env/systemd/移行手順/テスト/アセット方針の不足分だけを追加する方針にしてください。
+    file: "README.md"

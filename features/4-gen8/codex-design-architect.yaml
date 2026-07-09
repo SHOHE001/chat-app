@@ -1,0 +1,38 @@
+verdict: fail
+blocking: 1
+persona: architect
+summary: |
+  設計の大枠は Issue の方向に沿っていますが、env を唯一の設定境界にする設計なのに値検証と失敗時の扱いが定義されていません。特に PORT の不正値で常駐起動そのものが壊れるため、現状のままでは deploy 設計として成立が弱いです。
+findings:
+  - severity: high
+    title: "env 設定境界にバリデーションがなく、常駐起動が env typo で破綻する"
+    detail: |
+      `resolveConfig` は `PORT` を `Number(portRaw)` に正規化するだけで、`NaN`、小数、負数、範囲外ポートを拒否しません。たとえば `PORT=abc` や `PORT=99999` の `.env` / systemd `EnvironmentFile` で `app.server.listen(port, host)` が起動時例外になり、Issue の完了条件である「常駐起動し、再起動後も自動で復帰する」と衝突します。Restart=always により失敗ループになる点も deploy 設計として具体的な運用バグです。
+    suggestion: |
+      `resolveConfig` で `PORT` を 1..65535 の整数に検証し、不正値は明示的なエラーメッセージで fail-fast するか、既定値へフォールバックする方針を plan に固定してください。HOST/DB_PATH も最低限、空文字以外の扱いと相対パス基準をテストに含めるべきです。
+    file: "plan.md"
+    line: 31
+  - severity: medium
+    title: "`.env` の読み込み優先順位が設計境界として曖昧"
+    detail: |
+      plan は systemd では `EnvironmentFile=__INSTALL_DIR__/.env` を使い、同時にアプリ側でも `process.cwd()/.env` を読む設計です。この二重ロードは、既存の OS 環境変数、systemd の EnvironmentFile、アプリ内 loadEnvFile のどれを最終値とするかが plan 上で明確ではありません。設定の入口を env に寄せる設計方針自体はよいですが、同じファイルを systemd と Node の両方で読む構造は責務境界がぼやけます。
+    suggestion: |
+      優先順位を明記してください。例: OS/systemd で注入済みの値を優先し、アプリ内 `.env` はローカル開発時のみ未設定値を補う、など。可能なら `NODE_ENV` や起動モードに依存しない単純な規則にしてください。
+    file: "plan.md"
+    line: 50
+  - severity: medium
+    title: "`DB_PATH` の相対パス基準が CWD のままで、staticDir の設計方針と不整合"
+    detail: |
+      staticDir は CWD 非依存に直す一方、`.env.example` では `DB_PATH=data/chat.db` を許容し、「相対は起動時 CWD 基準」としています。systemd の WorkingDirectory に依存しない設計へ寄せる説明と、DB だけ WorkingDirectory 依存を残す設計が混在しています。これは直ちに破壊的ではありませんが、モジュール相対と CWD 相対が並存するため、移行時のデータ配置ルールが読み手に伝わりにくいです。
+    suggestion: |
+      DB_PATH は明示的に CWD 相対を採用するのか、install dir 相対へ正規化するのかを設計として固定してください。CWD 相対を維持するなら README と tests で WorkingDirectory が設定境界であることを明記してください。
+    file: "plan.md"
+    line: 79
+  - severity: medium
+    title: "README 全面刷新が既存ドキュメント構造との整合確認なしに指定されている"
+    detail: |
+      実装対象に `README.md（全面刷新）` とありますが、既存 README の内容を残すべきか、置き換えてよいか、既存の開発・テスト・仕様説明との関係が plan にありません。architect 観点では、deploy Issue の成果物が既存ドキュメントの情報構造を壊す可能性があります。
+    suggestion: |
+      README の既存章を確認したうえで、刷新ではなく必要章の追加・再編なのか、完全置換なのかを plan に明記してください。少なくとも既存のセットアップ/テスト情報を失わない方針を入れてください。
+    file: "plan.md"
+    line: 125
