@@ -6,9 +6,20 @@
 import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { openDb, insertMessage, getRecentMessages, upsertUser, getDefaultRoomId } from './db.js';
+import {
+  openDb,
+  insertMessage,
+  getRecentMessages,
+  upsertUser,
+  getDefaultRoomId,
+  listRooms,
+  createRoom,
+  deleteRoom,
+  getRoomById,
+} from './db.js';
 
 const MIN_NODE_VERSION = '22.22.3';
 const WS_MAX_PAYLOAD_BYTES = 64 * 1024; // ws 層: 異常フレームだけを close させる上限
@@ -147,15 +158,50 @@ function sanitizeBody(body) {
 }
 
 /**
- * createChatServer({ dbPath, staticDir }) → { server, wss, db, close }
+ * ルーム名を検証する。ニックネームと同じ規則（trim → 空拒否 → 32文字以内 → 制御文字拒否）。
+ * 不正なら null を返す。
+ */
+function validateRoomName(name) {
+  return validateNickname(name);
+}
+
+/**
+ * roomId 入力を正規化する。number 型かつ正の安全な整数のみ受理。
+ * それ以外（文字列 "1"・小数・null・配列など）は null を返す。
+ */
+function parseRoomId(value) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) return null;
+  return value;
+}
+
+/**
+ * 2つの文字列を定数時間で比較する（timingSafeEqual を SHA-256 ダイジェスト同士で行う）。
+ * 長さの異なる文字列同士でも throw しない。
+ */
+function safeStringEqual(a, b) {
+  const digestA = crypto.createHash('sha256').update(a).digest();
+  const digestB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(digestA, digestB);
+}
+
+/**
+ * createChatServer({ dbPath, staticDir, adminPassword }) → { server, wss, db, close }
  * トップレベルでは listen しない。
  */
-export function createChatServer({ dbPath, staticDir }) {
+export function createChatServer({ dbPath, staticDir, adminPassword }) {
   const root = path.resolve(staticDir);
   const rootReal = fs.realpathSync(root);
 
   const db = openDb(dbPath);
-  const roomId = getDefaultRoomId(db);
+  const defaultRoomId = getDefaultRoomId(db);
+
+  /**
+   * DB のルーム一覧を WS プロトコルの形（{id, name}）に整形する。
+   * created_at はクライアントに露出させない。
+   */
+  function roomsPayload() {
+    return listRooms(db).map((room) => ({ id: room.id, name: room.name }));
+  }
 
   const server = http.createServer((req, res) => {
     serveStatic(req, res, root, rootReal);
@@ -176,6 +222,15 @@ export function createChatServer({ dbPath, staticDir }) {
   function broadcastMessage(row) {
     const payload = JSON.stringify({ type: 'message', message: row });
     for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN && client.roomId === row.room_id) {
+        client.send(payload);
+      }
+    }
+  }
+
+  function broadcastRooms() {
+    const payload = JSON.stringify({ type: 'rooms', rooms: roomsPayload() });
+    for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(payload);
       }
@@ -184,6 +239,8 @@ export function createChatServer({ dbPath, staticDir }) {
 
   wss.on('connection', (ws) => {
     ws.nickname = null;
+    ws.isAdmin = false;
+    ws.roomId = null; // join 成功時に defaultRoomId をセット
 
     ws.on('message', (data) => {
       const rawText = data.toString('utf8');
@@ -213,9 +270,11 @@ export function createChatServer({ dbPath, staticDir }) {
           return;
         }
         ws.nickname = nickname;
+        ws.roomId = defaultRoomId;
         upsertUser(db, nickname);
-        const messages = getRecentMessages(db, roomId, HISTORY_LIMIT);
-        sendJson(ws, { type: 'history', messages });
+        const messages = getRecentMessages(db, ws.roomId, HISTORY_LIMIT);
+        sendJson(ws, { type: 'history', roomId: ws.roomId, messages });
+        sendJson(ws, { type: 'rooms', rooms: roomsPayload() });
         return;
       }
 
@@ -229,8 +288,106 @@ export function createChatServer({ dbPath, staticDir }) {
           // 空白のみの body は保存もブロードキャストもしない（エラーも返さない）。
           return;
         }
-        const row = insertMessage(db, roomId, ws.nickname, body);
+        const row = insertMessage(db, ws.roomId, ws.nickname, body);
         broadcastMessage(row);
+        return;
+      }
+
+      if (parsed.type === 'admin_auth') {
+        if (!adminPassword) {
+          sendError(ws, 'admin_disabled');
+          return;
+        }
+        const password = typeof parsed.password === 'string' ? parsed.password : '';
+        if (!safeStringEqual(password, adminPassword)) {
+          sendError(ws, 'bad_admin_password');
+          return;
+        }
+        ws.isAdmin = true;
+        sendJson(ws, { type: 'admin_auth_ok' });
+        return;
+      }
+
+      if (parsed.type === 'create_room') {
+        if (!ws.isAdmin) {
+          sendError(ws, 'forbidden');
+          return;
+        }
+        const name = validateRoomName(parsed.name);
+        if (name === null) {
+          sendError(ws, 'bad_room_name');
+          return;
+        }
+        try {
+          createRoom(db, name);
+        } catch (err) {
+          // UNIQUE 制約違反（名前重複）のときだけ room_exists に変換する。
+          // それ以外（DB ロック・I/O エラー等）は握りつぶさず再 throw し、想定外はクラッシュで顕在化させる。
+          const isUniqueViolation =
+            err.errcode === 2067 || // SQLITE_CONSTRAINT_UNIQUE
+            (typeof err.message === 'string' && err.message.includes('UNIQUE constraint failed'));
+          if (!isUniqueViolation) {
+            throw err;
+          }
+          sendError(ws, 'room_exists');
+          return;
+        }
+        broadcastRooms();
+        return;
+      }
+
+      if (parsed.type === 'delete_room') {
+        if (!ws.isAdmin) {
+          sendError(ws, 'forbidden');
+          return;
+        }
+        const targetRoomId = parseRoomId(parsed.roomId);
+        if (targetRoomId === null) {
+          sendError(ws, 'room_not_found');
+          return;
+        }
+        if (targetRoomId === defaultRoomId) {
+          sendError(ws, 'cannot_delete_default');
+          return;
+        }
+        const existing = getRoomById(db, targetRoomId);
+        if (!existing) {
+          sendError(ws, 'room_not_found');
+          return;
+        }
+        deleteRoom(db, targetRoomId);
+
+        // 削除ルーム在室中のクライアントをデフォルトルームへ強制移動
+        const defaultMessages = getRecentMessages(db, defaultRoomId, HISTORY_LIMIT);
+        for (const client of wss.clients) {
+          if (client.roomId === targetRoomId) {
+            client.roomId = defaultRoomId;
+            sendJson(client, { type: 'room_switched', roomId: defaultRoomId, messages: defaultMessages });
+          }
+        }
+
+        broadcastRooms();
+        return;
+      }
+
+      if (parsed.type === 'switch_room') {
+        if (!ws.nickname) {
+          sendError(ws, 'not_joined');
+          return;
+        }
+        const targetRoomId = parseRoomId(parsed.roomId);
+        if (targetRoomId === null) {
+          sendError(ws, 'room_not_found');
+          return;
+        }
+        const existing = getRoomById(db, targetRoomId);
+        if (!existing) {
+          sendError(ws, 'room_not_found');
+          return;
+        }
+        ws.roomId = targetRoomId;
+        const messages = getRecentMessages(db, targetRoomId, HISTORY_LIMIT);
+        sendJson(ws, { type: 'room_switched', roomId: targetRoomId, messages });
         return;
       }
 
@@ -266,7 +423,7 @@ if (isMainModule) {
   const PORT = process.env.PORT ?? 3000;
   const dbPath = 'data/chat.db';
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const app = createChatServer({ dbPath, staticDir: 'public' });
+  const app = createChatServer({ dbPath, staticDir: 'public', adminPassword: process.env.ADMIN_PASSWORD });
   app.server.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`chat-app: listening on http://localhost:${PORT}`);

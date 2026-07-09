@@ -72,17 +72,175 @@ body {
 .chat-screen {
   height: 100%;
   display: flex;
+  flex-direction: row;
+}
+
+.chat-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
   flex-direction: column;
 }
 
 .chat-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 12px 16px;
   background: #2563eb;
   color: #fff;
   font-weight: bold;
+}
+
+#room-name {
+  flex: 1;
+}
+
+.sidebar-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* サイドバー: スマホはオーバーレイ開閉式（既定は非表示） */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 260px;
+  max-width: 80%;
+  background: #fff;
+  border-right: 1px solid #e5e5e5;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 12px;
+  overflow-y: auto;
+  transform: translateX(-100%);
+  z-index: 20;
+}
+
+.sidebar.open {
+  transform: translateX(0);
+}
+
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+.sidebar-header {
+  display: none;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+}
+
+.sidebar-close {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.room-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.room-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.room-item button.room-select {
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.room-item button.room-select.active {
+  background: #e0e7ff;
+  font-weight: bold;
+}
+
+.room-item button.room-delete {
+  background: transparent;
+  border: none;
+  color: #dc2626;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.admin-login-toggle {
+  width: 100%;
+  background: transparent;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.admin-login-form,
+.create-room-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-login-form input,
+.create-room-form input {
+  font-size: 14px;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+.admin-login-form button,
+.create-room-form button {
+  font-size: 14px;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+}
+
+@media (min-width: 768px) {
+  .sidebar-open,
+  .sidebar-close,
+  .sidebar-overlay {
+    display: none;
+  }
+
+  .sidebar {
+    position: static;
+    transform: none;
+    border-right: 1px solid #e5e5e5;
+  }
 }
 
 .status {

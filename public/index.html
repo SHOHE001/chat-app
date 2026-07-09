@@ -24,21 +24,59 @@
   </div>
 
   <div id="chat-screen" class="chat-screen hidden">
-    <header class="chat-header">
-      <span id="room-name">全体</span>
-      <span id="connection-status" class="status"></span>
-    </header>
-    <ul id="message-list" class="message-list"></ul>
-    <form id="message-form" class="message-form">
-      <input
-        id="message-input"
-        type="text"
-        maxlength="2000"
-        placeholder="メッセージを入力"
-        autocomplete="off"
-      />
-      <button type="submit">送信</button>
-    </form>
+    <div id="sidebar-overlay" class="sidebar-overlay hidden"></div>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <span>ルーム</span>
+        <button id="sidebar-close" type="button" class="sidebar-close" aria-label="サイドバーを閉じる">×</button>
+      </div>
+      <ul id="room-list" class="room-list"></ul>
+
+      <div id="admin-login" class="admin-login">
+        <button id="admin-login-toggle" type="button" class="admin-login-toggle">管理者ログイン</button>
+        <form id="admin-login-form" class="admin-login-form hidden">
+          <input
+            id="admin-password-input"
+            type="password"
+            placeholder="合言葉"
+            autocomplete="off"
+          />
+          <button type="submit">ログイン</button>
+          <p id="admin-login-error" class="error" role="alert"></p>
+        </form>
+      </div>
+
+      <form id="create-room-form" class="create-room-form hidden">
+        <input
+          id="create-room-input"
+          type="text"
+          maxlength="32"
+          placeholder="新しいルーム名"
+          autocomplete="off"
+        />
+        <button type="submit">作成</button>
+        <p id="create-room-error" class="error" role="alert"></p>
+      </form>
+    </aside>
+
+    <div class="chat-main">
+      <header class="chat-header">
+        <button id="sidebar-open" type="button" class="sidebar-open" aria-label="サイドバーを開く">☰</button>
+        <span id="room-name">全体</span>
+        <span id="connection-status" class="status"></span>
+      </header>
+      <ul id="message-list" class="message-list"></ul>
+      <form id="message-form" class="message-form">
+        <input
+          id="message-input"
+          type="text"
+          maxlength="2000"
+          placeholder="メッセージを入力"
+          autocomplete="off"
+        />
+        <button type="submit">送信</button>
+      </form>
+    </div>
   </div>
 
   <script src="/app.js"></script>

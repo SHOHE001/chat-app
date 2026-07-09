@@ -122,3 +122,68 @@ export function getDefaultRoomId(db) {
   const row = db.prepare('SELECT id FROM rooms WHERE name = ?').get(DEFAULT_ROOM_NAME);
   return row ? Number(row.id) : undefined;
 }
+
+/**
+ * ルーム一覧を id 昇順で返す。
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @returns {{id: number, name: string, created_at: number}[]}
+ */
+export function listRooms(db) {
+  const rows = db.prepare('SELECT id, name, created_at FROM rooms ORDER BY id ASC').all();
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    created_at: Number(row.created_at),
+  }));
+}
+
+/**
+ * ルームを作成し、挿入行を返す。name の UNIQUE 制約違反はそのまま throw する
+ * （呼び出し側で捕捉して room_exists に変換する）。
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} name
+ */
+export function createRoom(db, name) {
+  const createdAt = Date.now();
+  const stmt = db.prepare('INSERT INTO rooms (name, created_at) VALUES (?, ?)');
+  const info = stmt.run(name, createdAt);
+  return {
+    id: Number(info.lastInsertRowid),
+    name,
+    created_at: createdAt,
+  };
+}
+
+/**
+ * roomId で指定したルームの行を返す（存在しなければ undefined）。
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {number} roomId
+ */
+export function getRoomById(db, roomId) {
+  const row = db.prepare('SELECT id, name, created_at FROM rooms WHERE id = ?').get(roomId);
+  if (!row) return undefined;
+  return {
+    id: Number(row.id),
+    name: row.name,
+    created_at: Number(row.created_at),
+  };
+}
+
+/**
+ * ルームをトランザクションで削除する（messages → rooms の順で DELETE）。
+ * 失敗時は ROLLBACK する。rooms の削除行数を返す。
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {number} roomId
+ */
+export function deleteRoom(db, roomId) {
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM messages WHERE room_id = ?').run(roomId);
+    const info = db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
+    db.exec('COMMIT');
+    return Number(info.changes);
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
