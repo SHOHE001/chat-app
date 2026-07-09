@@ -29,11 +29,20 @@
   const createRoomInput = document.getElementById('create-room-input');
   const createRoomError = document.getElementById('create-room-error');
 
+  const threadOverlay = document.getElementById('thread-overlay');
+  const threadPanel = document.getElementById('thread-panel');
+  const threadCloseBtn = document.getElementById('thread-close');
+  const threadRootEl = document.getElementById('thread-root');
+  const threadReplyList = document.getElementById('thread-reply-list');
+  const threadReplyForm = document.getElementById('thread-reply-form');
+  const threadReplyInput = document.getElementById('thread-reply-input');
+
   let ws = null;
   let nickname = '';
   let isAdmin = false;
   let currentRoomId = null;
   let rooms = [];
+  let openThreadRootId = null;
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -61,9 +70,14 @@
     sidebarOverlay.classList.add('hidden');
   }
 
+  function formatThreadBadgeText(count) {
+    return `\u{1F4AC} ${count}件`;
+  }
+
   function appendMessage(message) {
     const li = document.createElement('li');
     li.className = 'message-item';
+    li.dataset.messageId = String(message.id);
 
     const authorEl = document.createElement('span');
     authorEl.className = 'author';
@@ -73,10 +87,45 @@
     bodyEl.className = 'body';
     bodyEl.textContent = message.body;
 
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'message-actions';
+
+    const threadBtn = document.createElement('button');
+    threadBtn.type = 'button';
+    threadBtn.className = 'thread-open-btn';
+    threadBtn.textContent = 'スレッド';
+    threadBtn.addEventListener('click', () => {
+      openThread(message.id);
+    });
+    actionsEl.appendChild(threadBtn);
+
+    const badgeEl = document.createElement('span');
+    badgeEl.className = 'thread-badge hidden';
+    actionsEl.appendChild(badgeEl);
+
     li.appendChild(authorEl);
     li.appendChild(bodyEl);
+    li.appendChild(actionsEl);
     messageList.appendChild(li);
     messageList.scrollTop = messageList.scrollHeight;
+
+    const replyCount = typeof message.thread_reply_count === 'number' ? message.thread_reply_count : 0;
+    updateThreadBadge(message.id, replyCount);
+  }
+
+  function updateThreadBadge(rootId, count) {
+    const li = messageList.querySelector(`li[data-message-id="${rootId}"]`);
+    if (!li) return;
+    const badgeEl = li.querySelector('.thread-badge');
+    if (!badgeEl) return;
+    badgeEl.dataset.count = String(count);
+    if (count > 0) {
+      badgeEl.textContent = formatThreadBadgeText(count);
+      badgeEl.classList.remove('hidden');
+    } else {
+      badgeEl.textContent = '';
+      badgeEl.classList.add('hidden');
+    }
   }
 
   function renderHistory(messages) {
@@ -84,6 +133,64 @@
     for (const message of messages) {
       appendMessage(message);
     }
+  }
+
+  function openThreadPanel() {
+    threadPanel.classList.add('open');
+    threadOverlay.classList.remove('hidden');
+  }
+
+  function closeThreadPanel() {
+    threadPanel.classList.remove('open');
+    threadOverlay.classList.add('hidden');
+    openThreadRootId = null;
+    threadRootEl.textContent = '';
+    threadReplyList.textContent = '';
+  }
+
+  function renderThreadRoot(root) {
+    threadRootEl.textContent = '';
+
+    const authorEl = document.createElement('span');
+    authorEl.className = 'author';
+    authorEl.textContent = root.author;
+
+    const bodyEl = document.createElement('span');
+    bodyEl.className = 'body';
+    bodyEl.textContent = root.body;
+
+    threadRootEl.appendChild(authorEl);
+    threadRootEl.appendChild(bodyEl);
+  }
+
+  function appendThreadReply(reply) {
+    const li = document.createElement('li');
+    li.className = 'thread-reply-item';
+
+    const authorEl = document.createElement('span');
+    authorEl.className = 'author';
+    authorEl.textContent = reply.author;
+
+    const bodyEl = document.createElement('span');
+    bodyEl.className = 'body';
+    bodyEl.textContent = reply.body;
+
+    li.appendChild(authorEl);
+    li.appendChild(bodyEl);
+    threadReplyList.appendChild(li);
+    threadReplyList.scrollTop = threadReplyList.scrollHeight;
+  }
+
+  function renderThreadReplies(messages) {
+    threadReplyList.textContent = '';
+    for (const message of messages) {
+      appendThreadReply(message);
+    }
+  }
+
+  function openThread(rootId) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'open_thread', rootId }));
   }
 
   function setStatus(text) {
@@ -178,6 +285,7 @@
         showChat();
         setStatus('接続済み');
         currentRoomId = data.roomId;
+        closeThreadPanel();
         renderHistory(data.messages || []);
         updateRoomNameHeader();
       } else if (data.type === 'rooms') {
@@ -185,11 +293,31 @@
         renderRooms();
       } else if (data.type === 'room_switched') {
         currentRoomId = data.roomId;
+        closeThreadPanel();
         renderHistory(data.messages || []);
         updateRoomNameHeader();
         renderRooms();
       } else if (data.type === 'message') {
-        appendMessage(data.message);
+        const message = data.message;
+        if (message.thread_root_id === null || message.thread_root_id === undefined) {
+          appendMessage(message);
+        } else {
+          const rootId = message.thread_root_id;
+          if (openThreadRootId === rootId) {
+            appendThreadReply(message);
+          }
+          const li = messageList.querySelector(`li[data-message-id="${rootId}"]`);
+          if (li) {
+            const badgeEl = li.querySelector('.thread-badge');
+            const currentCount = badgeEl ? parseInt(badgeEl.dataset.count || '0', 10) : 0;
+            updateThreadBadge(rootId, currentCount + 1);
+          }
+        }
+      } else if (data.type === 'thread_history') {
+        openThreadRootId = data.rootId;
+        renderThreadRoot(data.root);
+        renderThreadReplies(data.messages || []);
+        openThreadPanel();
       } else if (data.type === 'admin_auth_ok') {
         isAdmin = true;
         showAdminUi();
@@ -212,6 +340,9 @@
         ) {
           // 管理操作の失敗はアラートで通知する
           window.alert(`操作に失敗しました: ${data.reason}`);
+        } else if (data.reason === 'thread_not_found') {
+          closeThreadPanel();
+          setStatus('エラー: thread_not_found');
         } else {
           setStatus(`エラー: ${data.reason}`);
         }
@@ -285,6 +416,24 @@
     createRoomError.textContent = '';
     ws.send(JSON.stringify({ type: 'create_room', name }));
     createRoomInput.value = '';
+  });
+
+  threadCloseBtn.addEventListener('click', () => {
+    closeThreadPanel();
+  });
+
+  threadOverlay.addEventListener('click', () => {
+    closeThreadPanel();
+  });
+
+  threadReplyForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const body = threadReplyInput.value.trim();
+    if (!body || !ws || ws.readyState !== WebSocket.OPEN || openThreadRootId === null) {
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'message', body, threadRootId: openThreadRootId }));
+    threadReplyInput.value = '';
   });
 
   const savedNickname = localStorage.getItem(NICKNAME_KEY);

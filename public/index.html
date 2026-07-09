@@ -24,6 +24,26 @@
   </div>
 
   <div id="chat-screen" class="chat-screen hidden">
+    <div id="thread-overlay" class="thread-overlay hidden"></div>
+    <aside id="thread-panel" class="thread-panel">
+      <div class="thread-panel-header">
+        <span>スレッド</span>
+        <button id="thread-close" type="button" class="thread-close" aria-label="スレッドパネルを閉じる">×</button>
+      </div>
+      <div id="thread-root" class="thread-root"></div>
+      <ul id="thread-reply-list" class="thread-reply-list"></ul>
+      <form id="thread-reply-form" class="thread-reply-form">
+        <input
+          id="thread-reply-input"
+          type="text"
+          maxlength="2000"
+          placeholder="返信を入力"
+          autocomplete="off"
+        />
+        <button type="submit">送信</button>
+      </form>
+    </aside>
+
     <div id="sidebar-overlay" class="sidebar-overlay hidden"></div>
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-header">

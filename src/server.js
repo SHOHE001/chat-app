@@ -19,6 +19,8 @@ import {
   createRoom,
   deleteRoom,
   getRoomById,
+  getThreadMessages,
+  getMessageById,
 } from './db.js';
 
 const MIN_NODE_VERSION = '22.22.3';
@@ -175,6 +177,22 @@ function parseRoomId(value) {
 }
 
 /**
+ * threadRootId / rootId 入力を検証して root 行を解決する。
+ * JSON number の正の安全な整数（parseRoomId を流用。文字列数値は拒否）→ メッセージ存在
+ * → クライアントの現在ルームに属する → root 自体がスレッド返信でない、をすべて満たせば
+ * root 行オブジェクトを返す。どれか欠ければ null（呼び出し側で thread_not_found に変換）。
+ */
+function resolveThreadRoot(db, roomId, value) {
+  const rootId = parseRoomId(value);
+  if (rootId === null) return null;
+  const root = getMessageById(db, rootId);
+  if (!root) return null;
+  if (root.room_id !== roomId) return null;
+  if (root.thread_root_id !== null) return null;
+  return root;
+}
+
+/**
  * 2つの文字列を定数時間で比較する（timingSafeEqual を SHA-256 ダイジェスト同士で行う）。
  * 長さの異なる文字列同士でも throw しない。
  */
@@ -288,7 +306,16 @@ export function createChatServer({ dbPath, staticDir, adminPassword }) {
           // 空白のみの body は保存もブロードキャストもしない（エラーも返さない）。
           return;
         }
-        const row = insertMessage(db, ws.roomId, ws.nickname, body);
+        let threadRootId = null;
+        if (parsed.threadRootId !== undefined && parsed.threadRootId !== null) {
+          const root = resolveThreadRoot(db, ws.roomId, parsed.threadRootId);
+          if (root === null) {
+            sendError(ws, 'thread_not_found');
+            return;
+          }
+          threadRootId = root.id;
+        }
+        const row = insertMessage(db, ws.roomId, ws.nickname, body, threadRootId);
         broadcastMessage(row);
         return;
       }
@@ -388,6 +415,21 @@ export function createChatServer({ dbPath, staticDir, adminPassword }) {
         ws.roomId = targetRoomId;
         const messages = getRecentMessages(db, targetRoomId, HISTORY_LIMIT);
         sendJson(ws, { type: 'room_switched', roomId: targetRoomId, messages });
+        return;
+      }
+
+      if (parsed.type === 'open_thread') {
+        if (!ws.nickname) {
+          sendError(ws, 'not_joined');
+          return;
+        }
+        const root = resolveThreadRoot(db, ws.roomId, parsed.rootId);
+        if (root === null) {
+          sendError(ws, 'thread_not_found');
+          return;
+        }
+        const messages = getThreadMessages(db, root.id, ws.roomId, HISTORY_LIMIT);
+        sendJson(ws, { type: 'thread_history', rootId: root.id, root, messages });
         return;
       }
 

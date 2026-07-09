@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS messages (
   room_id INTEGER NOT NULL REFERENCES rooms(id),
   author TEXT NOT NULL,
   body TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  thread_root_id INTEGER REFERENCES messages(id)
 );
 `;
 
@@ -37,11 +38,33 @@ export function openDb(path) {
   // スキーマは IF NOT EXISTS で常に無害に作成する（Phase 1 は新規 DB 前提）。
   db.exec(SCHEMA_SQL);
 
-  // user_version は将来 migration のフック。0 なら初期化して 1 に設定する。
+  // user_version: 0=新規（SCHEMA_SQL がフルスキーマを作成済み）、1=スレッド列なしの旧DB、2=現行。
   const { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 1');
+    db.exec('PRAGMA user_version = 2');
+  } else if (userVersion === 1) {
+    // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
+    // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
+    // 防御として列の有無も確認し冪等にする。
+    const hasColumn = db
+      .prepare('PRAGMA table_info(messages)')
+      .all()
+      .some((column) => column.name === 'thread_root_id');
+    db.exec('BEGIN');
+    try {
+      if (!hasColumn) {
+        db.exec('ALTER TABLE messages ADD COLUMN thread_root_id INTEGER REFERENCES messages(id)');
+      }
+      db.exec('PRAGMA user_version = 2');
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
   }
+
+  // index は列の存在が確定した後（全 version パス共通）に作成する。
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
 
   // デフォルトルーム "全体" を投入（既存なら無視）。
   db.prepare('INSERT OR IGNORE INTO rooms (name, created_at) VALUES (?, ?)').run(
@@ -59,18 +82,19 @@ export function openDb(path) {
  * @param {string} author
  * @param {string} body
  */
-export function insertMessage(db, roomId, author, body) {
+export function insertMessage(db, roomId, author, body, threadRootId = null) {
   const createdAt = Date.now();
   const stmt = db.prepare(
-    'INSERT INTO messages (room_id, author, body, created_at) VALUES (?, ?, ?, ?)',
+    'INSERT INTO messages (room_id, author, body, created_at, thread_root_id) VALUES (?, ?, ?, ?, ?)',
   );
-  const info = stmt.run(roomId, author, body, createdAt);
+  const info = stmt.run(roomId, author, body, createdAt, threadRootId);
   return {
     id: Number(info.lastInsertRowid),
     room_id: roomId,
     author,
     body,
     created_at: createdAt,
+    thread_root_id: threadRootId,
   };
 }
 
@@ -84,10 +108,14 @@ export function getRecentMessages(db, roomId, limit = 50) {
   const rows = db
     .prepare(
       `SELECT * FROM (
-         SELECT id, room_id, author, body, created_at
-         FROM messages
-         WHERE room_id = ?
-         ORDER BY id DESC
+         SELECT m.id, m.room_id, m.author, m.body, m.created_at,
+                COUNT(r.id) AS thread_reply_count,
+                MAX(r.created_at) AS thread_last_reply_at
+         FROM messages m
+         LEFT JOIN messages r ON r.thread_root_id = m.id AND r.room_id = m.room_id
+         WHERE m.room_id = ? AND m.thread_root_id IS NULL
+         GROUP BY m.id
+         ORDER BY m.id DESC
          LIMIT ?
        )
        ORDER BY id ASC`,
@@ -99,7 +127,62 @@ export function getRecentMessages(db, roomId, limit = 50) {
     author: row.author,
     body: row.body,
     created_at: Number(row.created_at),
+    thread_root_id: null, // タイムライン行は定義上 root のみ。broadcast row と形状を揃える
+    thread_reply_count: Number(row.thread_reply_count),
+    thread_last_reply_at: row.thread_last_reply_at === null ? null : Number(row.thread_last_reply_at),
   }));
+}
+
+/**
+ * スレッド root（rootId）への返信を id 昇順（履歴順の契約）で最大 limit 件返す。
+ * room_id 条件は getRecentMessages の JOIN 防御と対になる破損データ防御。
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {number} rootId
+ * @param {number} roomId
+ * @param {number} [limit]
+ */
+export function getThreadMessages(db, rootId, roomId, limit = 50) {
+  const rows = db
+    .prepare(
+      `SELECT * FROM (
+         SELECT id, room_id, author, body, created_at, thread_root_id
+         FROM messages
+         WHERE thread_root_id = ? AND room_id = ?
+         ORDER BY id DESC
+         LIMIT ?
+       )
+       ORDER BY id ASC`,
+    )
+    .all(rootId, roomId, limit);
+  return rows.map((row) => ({
+    id: Number(row.id),
+    room_id: Number(row.room_id),
+    author: row.author,
+    body: row.body,
+    created_at: Number(row.created_at),
+    thread_root_id: Number(row.thread_root_id),
+  }));
+}
+
+/**
+ * id でメッセージ 1 件を返す（存在しなければ undefined）。root 検証（存在・room_id・
+ * thread_root_id が NULL か）に使う。
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {number} messageId
+ */
+export function getMessageById(db, messageId) {
+  const row = db
+    .prepare('SELECT id, room_id, author, body, created_at, thread_root_id FROM messages WHERE id = ?')
+    .get(messageId);
+  if (!row) return undefined;
+  return {
+    id: Number(row.id),
+    room_id: Number(row.room_id),
+    author: row.author,
+    body: row.body,
+    created_at: Number(row.created_at),
+    thread_root_id: row.thread_root_id === null ? null : Number(row.thread_root_id),
+  };
 }
 
 /**
