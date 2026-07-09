@@ -203,6 +203,42 @@ function safeStringEqual(a, b) {
 }
 
 /**
+ * env（デフォルトは process.env）から起動設定を解決する。
+ * PORT は 1-65535 の整数を検証し、不正値は明示エラーで throw して fail-fast する。
+ * HOST は未設定/空白のみなら undefined（Node の既定 = IPv6 dual-stack 待受を維持）。
+ */
+export function resolveConfig(env = process.env) {
+  const port = parsePort(env.PORT);
+  const host = normalizeStr(env.HOST);
+  const dbPath = normalizeStr(env.DB_PATH) ?? 'data/chat.db';
+  const adminPassword = normalizeStr(env.ADMIN_PASSWORD);
+  return { port, host, dbPath, adminPassword };
+}
+
+// undefined/空/空白のみ → undefined。それ以外は trim した文字列。
+function normalizeStr(raw) {
+  if (raw === undefined) return undefined;
+  const t = String(raw).trim();
+  return t === '' ? undefined : t;
+}
+
+// 未設定/空/空白のみ → 3000。設定ありは 1-65535 の整数のみ受理。それ以外は throw（fail-fast）。
+// env ファイル由来の前後空白は許容（trim）。小数・符号・非数字は拒否。
+function parsePort(raw) {
+  if (raw === undefined) return 3000;
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return 3000;
+  if (!/^[0-9]+$/.test(trimmed)) {
+    throw new Error(`PORT が不正です（1-65535 の整数を指定してください）: ${raw}`);
+  }
+  const n = Number(trimmed);
+  if (n < 1 || n > 65535) {
+    throw new Error(`PORT が範囲外です（1-65535）: ${raw}`);
+  }
+  return n;
+}
+
+/**
  * createChatServer({ dbPath, staticDir, adminPassword }) → { server, wss, db, close }
  * トップレベルでは listen しない。
  */
@@ -462,12 +498,19 @@ const isMainModule = (() => {
 
 if (isMainModule) {
   checkNodeVersion();
-  const PORT = process.env.PORT ?? 3000;
-  const dbPath = 'data/chat.db';
+  const { port, host, dbPath, adminPassword } = resolveConfig();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const app = createChatServer({ dbPath, staticDir: 'public', adminPassword: process.env.ADMIN_PASSWORD });
-  app.server.listen(PORT, () => {
-    // eslint-disable-next-line no-console
-    console.log(`chat-app: listening on http://localhost:${PORT}`);
-  });
+  const staticDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+  const app = createChatServer({ dbPath, staticDir, adminPassword });
+  if (host) {
+    app.server.listen(port, host, () => {
+      // eslint-disable-next-line no-console
+      console.log(`chat-app: listening on http://${host}:${port}`);
+    });
+  } else {
+    app.server.listen(port, () => {
+      // eslint-disable-next-line no-console
+      console.log(`chat-app: listening on port ${port} (all interfaces)`);
+    });
+  }
 }

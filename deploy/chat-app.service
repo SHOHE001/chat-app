@@ -1,0 +1,17 @@
+[Unit]
+Description=chat-app (question chat MVP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# __INSTALL_DIR__ / __NODE_BIN__ は README の手順で実値に置換する
+WorkingDirectory=__INSTALL_DIR__
+# 先頭 '-' で .env 欠損時も起動失敗しない（存在すれば env を注入）
+EnvironmentFile=-__INSTALL_DIR__/.env
+ExecStart=__NODE_BIN__ src/server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

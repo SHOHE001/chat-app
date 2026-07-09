@@ -10,3 +10,4 @@ features/.batch/lock
 node_modules/
 *.db
 data/
+.env
