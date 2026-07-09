@@ -1,0 +1,194 @@
+
+> chat-app@1.0.0 test
+> node --test
+
+TAP version 13
+# (node:3802215) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: T01 2つのWSクライアント間でメッセージがリアルタイム配信される
+ok 1 - T01 2つのWSクライアント間でメッセージがリアルタイム配信される
+  ---
+  duration_ms: 633.755969
+  type: 'test'
+  ...
+# Subtest: T02 入室時に直近履歴を id 昇順で受信する
+ok 2 - T02 入室時に直近履歴を id 昇順で受信する
+  ---
+  duration_ms: 632.583403
+  type: 'test'
+  ...
+# Subtest: T03_boundary 空白のみ body は保存もブロードキャストもされない
+ok 3 - T03_boundary 空白のみ body は保存もブロードキャストもされない
+  ---
+  duration_ms: 673.117861
+  type: 'test'
+  ...
+# Subtest: T04_persistence DBを閉じて再オープンしても履歴が残る
+ok 4 - T04_persistence DBを閉じて再オープンしても履歴が残る
+  ---
+  duration_ms: 461.174628
+  type: 'test'
+  ...
+# Subtest: T05_boundary join せずに message を送ると error が返り保存されない
+ok 5 - T05_boundary join せずに message を送ると error が返り保存されない
+  ---
+  duration_ms: 401.859552
+  type: 'test'
+  ...
+# Subtest: T06_boundary 2001文字以上のbodyは2000文字に切り詰められる
+ok 6 - T06_boundary 2001文字以上のbodyは2000文字に切り詰められる
+  ---
+  duration_ms: 551.554697
+  type: 'test'
+  ...
+# Subtest: T07_boundary 不正なnicknameでのjoinはbad_nicknameで拒否される
+ok 7 - T07_boundary 不正なnicknameでのjoinはbad_nicknameで拒否される
+  ---
+  duration_ms: 354.948589
+  type: 'test'
+  ...
+# Subtest: T08_boundary 8KB超のフレームはtoo_largeで拒否され接続は維持される
+ok 8 - T08_boundary 8KB超のフレームはtoo_largeで拒否され接続は維持される
+  ---
+  duration_ms: 458.375457
+  type: 'test'
+  ...
+# Subtest: T09_boundary 静的配信のtraversal/不正エンコードが拒否される
+ok 9 - T09_boundary 静的配信のtraversal/不正エンコードが拒否される
+  ---
+  duration_ms: 375.598142
+  type: 'test'
+  ...
+# Subtest: T10_boundary root外を指すsymlink経由のアクセスは403で拒否される
+ok 10 - T10_boundary root外を指すsymlink経由のアクセスは403で拒否される
+  ---
+  duration_ms: 319.534481
+  type: 'test'
+  ...
+# (node:3802216) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: T11_admin_auth 正しい合言葉でadmin_auth_ok、誤った合言葉でbad_admin_password
+ok 11 - T11_admin_auth 正しい合言葉でadmin_auth_ok、誤った合言葉でbad_admin_password
+  ---
+  duration_ms: 455.107756
+  type: 'test'
+  ...
+# Subtest: T12_boundary_admin_disabled adminPassword未設定サーバーでは正しい値でもadmin_disabled
+ok 12 - T12_boundary_admin_disabled adminPassword未設定サーバーでは正しい値でもadmin_disabled
+  ---
+  duration_ms: 296.901524
+  type: 'test'
+  ...
+# Subtest: T13_boundary_forbidden 未認証クライアントのcreate_room/delete_roomはforbiddenでDB変化なし
+ok 13 - T13_boundary_forbidden 未認証クライアントのcreate_room/delete_roomはforbiddenでDB変化なし
+  ---
+  duration_ms: 425.905652
+  type: 'test'
+  ...
+# Subtest: T14_create_room 管理者のcreate_roomで全クライアントにroomsがブロードキャストされる（join直後はhistory→rooms順、要素は{id,name}のみ）
+ok 14 - T14_create_room 管理者のcreate_roomで全クライアントにroomsがブロードキャストされる（join直後はhistory→rooms順、要素は{id,name}のみ）
+  ---
+  duration_ms: 540.290751
+  type: 'test'
+  ...
+# Subtest: T15_boundary_room_name 空名・33文字・制御文字入りはbad_room_name、重複名はroom_exists
+ok 15 - T15_boundary_room_name 空名・33文字・制御文字入りはbad_room_name、重複名はroom_exists
+  ---
+  duration_ms: 419.74707
+  type: 'test'
+  ...
+# Subtest: T16_boundary_delete_default デフォルトルーム削除はcannot_delete_default、型不正idはroom_not_found、いずれもルームは残る
+ok 16 - T16_boundary_delete_default デフォルトルーム削除はcannot_delete_default、型不正idはroom_not_found、いずれもルームは残る
+  ---
+  duration_ms: 481.117585
+  type: 'test'
+  ...
+# Subtest: T17_delete_room 管理者の削除でroomsから消えmessagesも消える、存在しないidはroom_not_found
+ok 17 - T17_delete_room 管理者の削除でroomsから消えmessagesも消える、存在しないidはroom_not_found
+  ---
+  duration_ms: 635.058223
+  type: 'test'
+  ...
+# Subtest: T18_delete_room_eviction 在室者は削除時にroom_switched（デフォルトルーム履歴付き）を受信し以後デフォルトルームの新着を受ける
+ok 18 - T18_delete_room_eviction 在室者は削除時にroom_switched（デフォルトルーム履歴付き）を受信し以後デフォルトルームの新着を受ける
+  ---
+  duration_ms: 773.388591
+  type: 'test'
+  ...
+# Subtest: T19_switch_room 正常系はroom_switched+履歴（id昇順・最大50件）、join前はnot_joined、不明id/型不正はroom_not_found
+ok 19 - T19_switch_room 正常系はroom_switched+履歴（id昇順・最大50件）、join前はnot_joined、不明id/型不正はroom_not_found
+  ---
+  duration_ms: 578.834691
+  type: 'test'
+  ...
+# Subtest: T20_isolation ルームA在室者の発言はA在室者だけに届きB在室者には届かない
+ok 20 - T20_isolation ルームA在室者の発言はA在室者だけに届きB在室者には届かない
+  ---
+  duration_ms: 826.344981
+  type: 'test'
+  ...
+# Subtest: T21_room_persistence 作成したルームと投稿がDB再オープン後も残る
+ok 21 - T21_room_persistence 作成したルームと投稿がDB再オープン後も残る
+  ---
+  duration_ms: 240.961015
+  type: 'test'
+  ...
+# (node:3802222) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: T31_thread_reply_and_history root投稿→threadRootId付きmessageで返信→open_threadでthread_history（root+返信id昇順）が取得できる
+ok 22 - T31_thread_reply_and_history root投稿→threadRootId付きmessageで返信→open_threadでthread_history（root+返信id昇順）が取得できる
+  ---
+  duration_ms: 710.715034
+  type: 'test'
+  ...
+# Subtest: T32_thread_realtime 同ルームの別クライアントにスレッド返信がtype:messageで届きthread_root_idがrootのid
+ok 23 - T32_thread_realtime 同ルームの別クライアントにスレッド返信がtype:messageで届きthread_root_idがrootのid
+  ---
+  duration_ms: 595.432154
+  type: 'test'
+  ...
+# Subtest: T33_timeline_thread_meta 返信2件後のhistory/room_switchedでroot行にthread_reply_count:2とthread_last_reply_at、返信0件行はcount0/null、スレッド返信はタイムライン不在
+ok 24 - T33_timeline_thread_meta 返信2件後のhistory/room_switchedでroot行にthread_reply_count:2とthread_last_reply_at、返信0件行はcount0/null、スレッド返信はタイムライン不在
+  ---
+  duration_ms: 586.168191
+  type: 'test'
+  ...
+# Subtest: T34_boundary_thread_validation 不存在id/文字列"1"/小数/0/他ルームroot/ネスト返信はthread_not_foundでmessages行数不変、join前open_threadはnot_joined
+ok 25 - T34_boundary_thread_validation 不存在id/文字列"1"/小数/0/他ルームroot/ネスト返信はthread_not_foundでmessages行数不変、join前open_threadはnot_joined
+  ---
+  duration_ms: 733.126455
+  type: 'test'
+  ...
+# Subtest: T35_migration_v1_to_v2 旧スキーマ（thread_root_idなし・user_version=1）DBがopenDbでv2になり既存行が読め返信も挿入できる、再オープン・中間状態DBも冪等に成功
+ok 26 - T35_migration_v1_to_v2 旧スキーマ（thread_root_idなし・user_version=1）DBがopenDbでv2になり既存行が読め返信も挿入できる、再オープン・中間状態DBも冪等に成功
+  ---
+  duration_ms: 1028.891761
+  type: 'test'
+  ...
+# Subtest: T36_thread_room_isolation ルームAのrootへのスレッド返信はルームB在室クライアントに届かない
+ok 27 - T36_thread_room_isolation ルームAのrootへのスレッド返信はルームB在室クライアントに届かない
+  ---
+  duration_ms: 976.975632
+  type: 'test'
+  ...
+# Subtest: T37_thread_persistence スレッド返信投稿後にサーバーclose→openDbし直すとgetThreadMessagesで返信が残っている
+ok 28 - T37_thread_persistence スレッド返信投稿後にサーバーclose→openDbし直すとgetThreadMessagesで返信が残っている
+  ---
+  duration_ms: 513.076963
+  type: 'test'
+  ...
+# Subtest: T38_thread_root_id_null_compat threadRootId:nullを明示送信すると通常のタイムライン投稿としてbroadcastされthread_root_idがnullでエラーにならない
+ok 29 - T38_thread_root_id_null_compat threadRootId:nullを明示送信すると通常のタイムライン投稿としてbroadcastされthread_root_idがnullでエラーにならない
+  ---
+  duration_ms: 227.881935
+  type: 'test'
+  ...
+1..29
+# tests 29
+# suites 0
+# pass 29
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5891.85232

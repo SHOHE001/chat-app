@@ -1,0 +1,22 @@
+verdict: pass
+blocking: 0
+persona: architect
+summary: |
+  critical/high に相当する設計不整合やスコープ逸脱は見当たりません。DB/WS/UI の責務分離は plan に概ね沿っており、migration と acceptance coverage も主要経路を押さえています。
+findings:
+  - severity: medium
+    title: "スレッド返信のライブ更新が timeline meta の一部しか反映していない"
+    detail: |
+      plan では broadcast 受信時に該当 root の `thread_reply_count += 1` と `thread_last_reply_at = row.created_at` をローカル状態へ更新する契約が明文化されていますが、UI 実装は badge count だけを DOM の `data-count` で更新し、最新返信時刻の表示・保持はありません。現状 UI が時刻を表示しないため即時バグではありませんが、server payload の meta 契約と client state の表現がずれており、将来 `thread_last_reply_at` 表示を足す際に再取得時だけ値が変わる歪みが残ります。
+    suggestion: |
+      タイムライン item に `thread_last_reply_at` を保持する data 属性か state map を追加し、history/room_switched と broadcast の両方で同じ更新関数を通す設計に寄せる。表示しない方針なら plan の client-side meta 更新契約から latest time を外す。
+    file: "public/app.js"
+    line: 302
+  - severity: low
+    title: "スレッド UI の生成ロジックが通常メッセージ描画と重複している"
+    detail: |
+      `appendMessage`、`renderThreadRoot`、`appendThreadReply` が author/body の DOM 構築をそれぞれ個別に持っており、今後 message 表示に時刻や装飾を足すと timeline と thread panel で差分が生まれやすい構造です。architect 観点では小さい重複ですが、同一ドメイン概念の表示部品として境界がやや散っています。
+    suggestion: |
+      `createMessageContent(message)` のような小さな DOM factory を切り出し、timeline actions だけを `appendMessage` 側で追加する形にすると変更点を集約できます。
+    file: "public/app.js"
+    line: 73

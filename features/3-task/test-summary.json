@@ -1,0 +1,27 @@
+{
+  "framework": "node:test (node --test)",
+  "command": "npm test",
+  "total": 29,
+  "pass": 29,
+  "fail": 0,
+  "skipped": 0,
+  "new_tests": {
+    "file": "tests/threads.test.js",
+    "ids": [
+      "T31_thread_reply_and_history",
+      "T32_thread_realtime",
+      "T33_timeline_thread_meta",
+      "T34_boundary_thread_validation",
+      "T35_migration_v1_to_v2",
+      "T36_thread_room_isolation",
+      "T37_thread_persistence",
+      "T38_thread_root_id_null_compat"
+    ]
+  },
+  "pre_existing_tests": {
+    "files": ["tests/chat.test.js", "tests/rooms.test.js"],
+    "count": 21,
+    "modified": false
+  },
+  "notes": "check-spec-divergence.mjs はコミット済み diff 前提のため本フェーズでは全 ID missing 表示（divergences 0）。orchestrator が実ファイルと npm test で突き合わせ済み。UI（public/app.js のスレッドパネル）は acceptance test の対象外で、WS プロトコル層までを自動テストでカバー。"
+}

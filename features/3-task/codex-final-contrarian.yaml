@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: contrarian
+summary: |
+  critical/high としてブロックすべき実害は見つかりません。実装は plan の最小拡張に概ね沿っていますが、UI 側に非同期応答順とライブ集計の弱い前提が残っています。
+findings:
+  - severity: medium
+    title: "open_thread 応答の到着順競合で古いスレッドが表示され得る"
+    detail: |
+      openThread(rootId) はリクエスト中の rootId を保持せず、thread_history 受信時に無条件で openThreadRootId = data.rootId として描画します。ユーザーがスレッドAを開いた直後にスレッドBを開き、Aの thread_history が後着すると、最後に選んだBではなくAのパネルに戻る可能性があります。低遅延ローカルテストでは出にくいですが、WS の往復とユーザー連打で現実的に起きる UI 競合です。
+    suggestion: |
+      openThread 送信時に pendingThreadRootId を保存し、thread_history 受信時に data.rootId が pendingThreadRootId と一致する場合だけ描画する。閉じた場合も pending を null にする。
+    file: "public/app.js"
+    line: 154
+  - severity: medium
+    title: "ライブ返信バッジ更新が未表示 root を取りこぼす"
+    detail: |
+      スレッド返信の broadcast 受信時、該当 root の li がタイムライン DOM に存在する場合だけ count を増やします。直近50件外の root への返信、または履歴再描画直前後のタイミングではローカル状態に保存されず、後で root が表示されてもライブ中の返信数は反映されません。history/room_switched で回復する契約ではありますが、表示中セッションの一貫性は弱いです。
+    suggestion: |
+      rootId ごとの liveMeta Map を持ち、DOM がない場合も count/last_reply_at を記録して appendMessage 時に反映する。あるいは明示的に『表示中タイムライン外の root はライブ更新対象外』としてテストと仕様に落とす。
+    file: "public/app.js"
+    line: 301
+  - severity: low
+    title: "テストが UI 実装の主要経路を直接検証していない"
+    detail: |
+      acceptance は WS/DB の契約を厚く検証していますが、スレッドパネルの開閉、返信フォーム送信、thread_history 描画、バッジ増分といった public/app.js の主要追加ロジックはブラウザ環境で検証されていません。今回の変更の失敗モードは UI 側にも多く、CI green の説得力が少し弱いです。
+    suggestion: |
+      最小限でよいので Playwright または jsdom 相当で、thread_history 受信後にパネルが開くこと、返信 broadcast で開いているスレッドに追記されること、バッジが増えることを追加する。
+    file: "tests/threads.test.js"
+    line: 1

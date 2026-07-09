@@ -1,0 +1,163 @@
+diff --git a/features/3-task/plan-snapshots/plan.md.round-2 b/features/3-task/plan-snapshots/plan.md.round-3
+index 16da3cb..c8d9ace 100644
+--- a/features/3-task/plan-snapshots/plan.md.round-2
++++ b/features/3-task/plan-snapshots/plan.md.round-3
+@@ -53,7 +53,7 @@ labels: type:feature, batch:feature
+ 
+ - `insertMessage(db, roomId, author, body, threadRootId = null)` — 既存シグネチャ末尾に省略可能引数を追加。返す row に `thread_root_id` を含める。**責務注記**: `insertMessage` 自体は threadRootId の妥当性（同 room・root 性）を検証しない。検証は WS 層の `validateThreadRoot` が唯一の入口で、DB 関数を直接呼ぶテストコードは自分で整合を保つ契約とする。
+ - `getRecentMessages(db, roomId, limit)` — **契約変更**: `WHERE room_id = ? AND thread_root_id IS NULL` でタイムライン専用にし、各行に `thread_reply_count`（返信数）と `thread_last_reply_at`（最新返信の created_at、返信 0 件なら null）を LEFT JOIN + GROUP BY 集計で付与する。スレッド返信はタイムラインに出さない。集計 JOIN は `ON r.thread_root_id = m.id AND r.room_id = m.room_id` とし、万一 room をまたぐ破損データが混入しても表示集計へ波及しない防御を入れる。行形状の統一のため `thread_root_id: null` も返す（ライブ broadcast row とキー集合を一致させる）。
+-- `getThreadMessages(db, rootId, limit = 50)` — 新規。`WHERE thread_root_id = ?` を「内側 id DESC LIMIT → 外側 id ASC」の既存パターンで最新 limit 件返す。行形状は `{id, room_id, author, body, created_at, thread_root_id}`。
++- `getThreadMessages(db, rootId, roomId, limit = 50)` — 新規。`WHERE thread_root_id = ? AND room_id = ?` を「内側 id DESC LIMIT → 外側 id ASC」の既存パターンで最新 limit 件返す。行形状は `{id, room_id, author, body, created_at, thread_root_id}`。`room_id` 条件は getRecentMessages の JOIN 防御と対になる破損データ防御（万一 room をまたぐ返信行が入っても thread_history に混入させない）。
+ - `getMessageById(db, messageId)` — 新規。`{id, room_id, author, body, created_at, thread_root_id}` を返す（存在しなければ undefined）。root 検証（存在・room_id・thread_root_id が NULL か）に使う。
+ 
+ ### WS プロトコル（src/server.js）
+@@ -65,11 +65,12 @@ labels: type:feature, batch:feature
+ ```
+ 
+ - `threadRootId` が undefined / null → 従来通りタイムライン投稿（完全後方互換）。
+-- 指定時の検証: 正整数チェック（`parseRoomId` と同型）→ `getMessageById` → 不存在 / `room_id` がクライアントの現在ルームと不一致 / root 自体がスレッド返信（ネスト禁止）→ いずれも `sendError(ws, 'thread_not_found')` に統一。理由を出し分けないことで実装とテストを単純化し、他ルームのメッセージ id の存在探りも防ぐ。
+-- 検証は新設ヘルパー `validateThreadRoot(db, roomId, value)`（通れば root id、不正なら null）に集約し、`open_thread` ハンドラと共有する。
+-- 検証通過後: `insertMessage(db, ws.roomId, ws.nickname, body, threadRootId)` → `broadcastMessage(row)`。
++- **入力型契約**: `threadRootId` / `rootId` は **JSON number の正の安全な整数のみ許可**。数値文字列 `"1"`・小数・0 以下・配列などはすべて拒否する。チェックには既存 `parseRoomId`（`typeof value === 'number' && Number.isSafeInteger(value) && value > 0` のみ受理。文字列数値は現行実装で拒否される）をそのまま流用する。T34 の文字列 `"1"` 拒否期待はこの契約に基づく。
++- 指定時の検証: `parseRoomId` による型チェック → `getMessageById` → 不存在 / `room_id` がクライアントの現在ルームと不一致 / root 自体がスレッド返信（ネスト禁止）→ いずれも `sendError(ws, 'thread_not_found')` に統一。理由を出し分けないことで実装とテストを単純化し、他ルームのメッセージ id の存在探りも防ぐ。
++- 検証は新設ヘルパー `resolveThreadRoot(db, roomId, value)`（通れば **root 行オブジェクト**、不正なら null）に集約し、`open_thread` ハンドラと共有する。row を返すことで `open_thread` の root 二重取得を避ける。
++- 検証通過後: `insertMessage(db, ws.roomId, ws.nickname, body, root.id)` → `broadcastMessage(row)`。
+ 
+-**配信** — `broadcastMessage` は変更なし（row に `thread_root_id` が乗るだけ）。スレッド返信も同ルーム全員に届き、受信側クライアントが `thread_root_id` の有無で「スレッドパネルに追記」か「タイムラインのバッジ更新」かを振り分ける。スレッド購読者管理をサーバーに持たない（Phase 1 の規模では room 単位配信で十分）。
++**配信** — `broadcastMessage` の**本体ロジックは変更しない**が、送信 payload の message row には `thread_root_id` キーが追加される（プロトコル出力形状の変更。既存テストで payload キーに触れる箇所は追従する）。スレッド返信も同ルーム全員に届き、受信側クライアントが `thread_root_id` の有無で「スレッドパネルに追記」か「タイムラインのバッジ更新」かを振り分ける。スレッド購読者管理をサーバーに持たない（Phase 1 の規模では room 単位配信で十分）。
+ 
+ **broadcast 受信時のメタ更新契約（明文化）**: スレッド返信の broadcast row は `thread_root_id`（root の id）と `created_at` を必ず含む。受信クライアントは該当 root について `thread_reply_count += 1`、`thread_last_reply_at = row.created_at` としてローカル状態を更新する。history / room_switched で再取得した場合はサーバー集計値で上書きされるため、ライブ更新の誤差は再取得で自然回復する。
+ 
+@@ -79,7 +80,7 @@ labels: type:feature, batch:feature
+ { "type": "open_thread", "rootId": 123 }
+ ```
+ 
+-- join 前は `not_joined`。`rootId` の検証は `validateThreadRoot` で同じ 4 条件 → `thread_not_found`。
++- join 前は `not_joined`。`rootId` の検証は `resolveThreadRoot` で同じ 4 条件 → `thread_not_found`。
+ - 成功時: `{ "type": "thread_history", "rootId": 123, "root": {root行}, "messages": [返信行... 最新50件 id昇順] }`
+ - **root 行の形状契約**: `thread_history.root` は `getMessageById` の生形状（`thread_reply_count` / `thread_last_reply_at` のメタ**無し**）。スレッドパネルの root 表示はメタを使わない（返信数はパネル内の返信リスト自体が見えているため不要）という UI 契約とし、タイムライン行とあえて形状を揃えない。
+ 
+@@ -152,8 +153,9 @@ after（イメージ）:
+     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
+     // 防御として列の有無も確認し冪等にする。
+     const hasColumn = db
+-      .prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?')
+-      .get('messages', 'thread_root_id');
++      .prepare('PRAGMA table_info(messages)')
++      .all()
++      .some((column) => column.name === 'thread_root_id');
+     db.exec('BEGIN');
+     try {
+       if (!hasColumn) {
+@@ -171,7 +173,7 @@ after（イメージ）:
+   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
+ ```
+ 
+-（implementer への注記: `pragma_table_info` テーブル値関数が node:sqlite（Node 組み込みの SQLite バインディング）の prepare で使えない場合は `PRAGMA table_info(messages)` の all() 結果から `name === 'thread_root_id'` を探す形に置き換えてよい。また SQLite では DDL・`PRAGMA user_version` ともトランザクション内で ROLLBACK 可能であることを T35 相当のテストで担保する。）
++（implementer への注記: 列有無チェックは上記 `PRAGMA table_info(messages)` の all() 方式で**確定**（node:sqlite で確実に動く形。table-valued 関数 `pragma_table_info(?)` へのパラメータ bind は使わない）。また SQLite では DDL・`PRAGMA user_version` ともトランザクション内で ROLLBACK 可能であることを T35 相当のテストで担保する。）
+ 
+ ### src/db.js — insertMessage（before/after）
+ 
+@@ -278,19 +280,19 @@ export function getRecentMessages(db, roomId, limit = 50) {
+ ### src/db.js — getThreadMessages / getMessageById（新設スニペット）
+ 
+ ```js
+-export function getThreadMessages(db, rootId, limit = 50) {
++export function getThreadMessages(db, rootId, roomId, limit = 50) {
+   const rows = db
+     .prepare(
+       `SELECT * FROM (
+          SELECT id, room_id, author, body, created_at, thread_root_id
+          FROM messages
+-         WHERE thread_root_id = ?
++         WHERE thread_root_id = ? AND room_id = ?
+          ORDER BY id DESC
+          LIMIT ?
+        )
+        ORDER BY id ASC`,
+     )
+-    .all(rootId, limit);
++    .all(rootId, roomId, limit);
+   return rows.map((row) => ({
+     id: Number(row.id),
+     room_id: Number(row.room_id),
+@@ -317,22 +319,23 @@ export function getMessageById(db, messageId) {
+ }
+ ```
+ 
+-### src/server.js — validateThreadRoot（新設スニペット）
++### src/server.js — resolveThreadRoot（新設スニペット）
+ 
+ ```js
+ /**
+- * threadRootId / rootId 入力を検証する。正整数（parseRoomId と同型）→ メッセージ存在
++ * threadRootId / rootId 入力を検証して root 行を解決する。
++ * JSON number の正の安全な整数（parseRoomId を流用。文字列数値は拒否）→ メッセージ存在
+  * → クライアントの現在ルームに属する → root 自体がスレッド返信でない、をすべて満たせば
+- * root の id を返す。どれか欠ければ null（呼び出し側で thread_not_found に変換）。
++ * root 行オブジェクトを返す。どれか欠ければ null（呼び出し側で thread_not_found に変換）。
+  */
+-function validateThreadRoot(db, roomId, value) {
++function resolveThreadRoot(db, roomId, value) {
+   const rootId = parseRoomId(value);
+   if (rootId === null) return null;
+   const root = getMessageById(db, rootId);
+   if (!root) return null;
+   if (root.room_id !== roomId) return null;
+   if (root.thread_root_id !== null) return null;
+-  return rootId;
++  return root;
+ }
+ ```
+ 
+@@ -372,11 +375,12 @@ after（イメージ）:
+         }
+         let threadRootId = null;
+         if (parsed.threadRootId !== undefined && parsed.threadRootId !== null) {
+-          threadRootId = validateThreadRoot(db, ws.roomId, parsed.threadRootId);
+-          if (threadRootId === null) {
++          const root = resolveThreadRoot(db, ws.roomId, parsed.threadRootId);
++          if (root === null) {
+             sendError(ws, 'thread_not_found');
+             return;
+           }
++          threadRootId = root.id;
+         }
+         const row = insertMessage(db, ws.roomId, ws.nickname, body, threadRootId);
+         broadcastMessage(row);
+@@ -392,21 +396,20 @@ after（イメージ）:
+           sendError(ws, 'not_joined');
+           return;
+         }
+-        const rootId = validateThreadRoot(db, ws.roomId, parsed.rootId);
+-        if (rootId === null) {
++        const root = resolveThreadRoot(db, ws.roomId, parsed.rootId);
++        if (root === null) {
+           sendError(ws, 'thread_not_found');
+           return;
+         }
+-        const root = getMessageById(db, rootId);
+-        const messages = getThreadMessages(db, rootId, HISTORY_LIMIT);
+-        sendJson(ws, { type: 'thread_history', rootId, root, messages });
++        const messages = getThreadMessages(db, root.id, ws.roomId, HISTORY_LIMIT);
++        sendJson(ws, { type: 'thread_history', rootId: root.id, root, messages });
+         return;
+       }
+ ```
+ 
+ ### その他の変更ファイル
+ 
+-- `src/server.js` — `validateThreadRoot` ヘルパー新設、db.js からの import 追加
++- `src/server.js` — `resolveThreadRoot` ヘルパー新設、db.js からの import 追加
+ - `src/db.js` — `getThreadMessages` / `getMessageById` 新設
+ - `public/index.html` — スレッドパネル（overlay + panel + 返信フォーム）の静的マークアップ追加
+ - `public/app.js` — スレッドボタン/バッジ描画、`open_thread` 送信、`thread_history` / `message`（thread_root_id あり）受信処理、パネル開閉
+@@ -417,6 +420,8 @@ after（イメージ）:
+ 
+ acceptance test は `tests/threads.test.js` に新設。rooms.test.js の inbox（キュー方式受信）ヘルパーパターンを踏襲する。
+ 
++**fixture 契約**: スレッド返信の作成は原則 WS 経由（`{type:'message', body, threadRootId}`）で行う。`insertMessage` を直接呼んでスレッド返信を作る場合は、必ず「同 room に存在する root（`thread_root_id IS NULL`）の id」だけを渡すこと（DB 層は不変条件を検証しないため、テストが自分で整合を保つ）。
++
+ | ID | 内容 | 期待値 |
+ |---|---|---|
+ | T31_thread_reply_and_history | root 投稿 → `threadRootId` 付き message で返信 → `open_thread` | broadcast row に `thread_root_id` が入る。`thread_history` に root と返信（id 昇順）が入る |

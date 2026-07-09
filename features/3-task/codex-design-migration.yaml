@@ -1,0 +1,22 @@
+verdict: pass
+blocking: 0
+persona: migration
+summary: |
+  Round 3 の差分は、前 round の migration 観点の主要な互換性・不整合リスクを概ね解消している。critical/high に相当する具体的な後方互換破壊や既存呼び出し元との衝突は見つからない。
+findings:
+  - severity: low
+    title: "旧ヘルパー名 validateThreadRoot が責務注記に残っている"
+    detail: |
+      DB 関数の `insertMessage` 説明では、検証入口を `validateThreadRoot` と記載しているが、Round 3 で実際の設計は `resolveThreadRoot` に変更されている。実装者が参照すると import 名やテスト名を取り違える可能性があるが、スニペット本体は一貫しているため blocking ではない。
+    suggestion: |
+      `validateThreadRoot` の残存記述を `resolveThreadRoot` に置換する。
+    file: "plan.md"
+    line: 53
+  - severity: medium
+    title: "thread_history.root と history messages の形状差がクライアント実装で混同されやすい"
+    detail: |
+      計画では `thread_history.root` は `getMessageById` の生形状でメタ無し、`history / room_switched` の messages は `thread_reply_count` / `thread_last_reply_at` 付きと明記されている。意図的な契約なので blocking ではないが、public/app.js 側で同じ render 関数に流すと未定義メタ参照や表示差が起きやすい。
+    suggestion: |
+      UI 実装対象に、root 表示用とタイムライン行表示用を分ける、または render 関数がメタ欠落を許容することを追記する。
+    file: "plan.md"
+    line: 80

@@ -1,0 +1,22 @@
+verdict: pass
+blocking: 0
+persona: migration
+summary: |
+  critical/high に相当する後方互換破壊やマイグレーション不能化は見当たりません。v1→v2 の列追加、冪等化、threadRootId:null の互換挙動、既存タイムラインからの返信除外はいずれも plan の契約内です。
+findings:
+  - severity: medium
+    title: "deleteRoom の FK 有効化時挙動が未テスト"
+    detail: |
+      messages.thread_root_id に自己参照 FK が追加されたため、将来または環境差で SQLite の foreign_keys が有効になった場合、既存 deleteRoom の `DELETE FROM messages WHERE room_id = ?` が root と返信を同一文で削除できることを明示的に守るテストがありません。現状の node:sqlite 既定では通る可能性が高いものの、migration 観点では FK 追加後の既存削除 API の互換性確認として穴が残ります。
+    suggestion: |
+      既存 rooms/deleteRoom 系テストに、root と thread reply があるルーム削除後に messages が残らず、FK エラーにならないケースを追加してください。
+    file: "src/db.js"
+    line: 29
+  - severity: low
+    title: "user_version > 2 の DB を黙って起動する"
+    detail: |
+      openDb は user_version 0/1/2 だけを想定していますが、2 より大きい DB を開いた場合もそのまま index 作成と通常起動に進みます。将来スキーマを戻して起動した場合に、未知の新しい DB を古いコードで扱うリスクがあります。
+    suggestion: |
+      `userVersion > 2` の場合は明示的に throw するか、少なくとも起動不能理由が分かるエラーにしてください。
+    file: "src/db.js"
+    line: 42

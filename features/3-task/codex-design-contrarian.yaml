@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: contrarian
+summary: |
+  Round 3 の差分は前回の主要な不整合を解消しており、実装すると具体的に壊れる critical/high は見つかりません。残る問題は、命名の残骸と、入力検証ヘルパーの責務がやや過剰に既存関数名へ依存している点です。
+findings:
+  - severity: medium
+    title: "validateThreadRoot という旧名が設計本文に残っている"
+    detail: |
+      DB 関数の説明で `insertMessage` の検証入口を `validateThreadRoot` と書いている一方、今回の差分ではヘルパー名を `resolveThreadRoot` に変更している。スニペット側は正しいため設計破綻ではないが、実装者が旧名で追加したり import 名を取り違える余地がある。
+    suggestion: |
+      該当箇所を `resolveThreadRoot` に統一する。
+    file: "plan.md"
+    line: 56
+  - severity: medium
+    title: "parseRoomId 流用は単純だが責務名と対象 ID がずれている"
+    detail: |
+      `threadRootId` / `rootId` の検証に `parseRoomId` をそのまま使う方針は実装量を減らせるが、message id を room id parser で処理する設計になる。将来 room id と message id の許容範囲やエラー扱いが分かれた場合、無関係な変更がスレッド投稿を壊す結合になる。
+    suggestion: |
+      同じ実装を共有するなら、`parsePositiveSafeInteger` のような汎用ヘルパーに切り出し、`parseRoomId` と `resolveThreadRoot` の双方から使う案を検討する。現状維持でも blocking ではない。
+    file: "plan.md"
+    line: 68
+  - severity: low
+    title: "fixture 契約が DB 関数の危険性をテスト側に押し戻している"
+    detail: |
+      今回追加された fixture 契約は、`insertMessage` の不変条件未検証をテストコードの規律で補うものになっている。Phase 1 の小規模実装としては許容できるが、DB 関数を直接使うテストや将来の呼び出し元が増えるほど破損データを作りやすい。
+    suggestion: |
+      少なくとも `tests/threads.test.js` ではスレッド返信作成を WS 経由に寄せ、DB 直呼びが必要な場合だけ明示的な helper を作って誤用を減らす。
+    file: "plan.md"
+    line: 423

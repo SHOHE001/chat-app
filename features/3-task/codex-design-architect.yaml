@@ -1,0 +1,24 @@
+verdict: pass
+blocking: 0
+persona: architect
+summary: |
+  Round 3 の差分は前 round の主要な設計衝突を解消しており、critical/high に相当する新規の破綻は見当たりません。残る問題は命名・責務境界の一貫性に関する medium/low の改善点です。
+findings:
+  - severity: medium
+    title: "ヘルパー名の改名が責務注記に残存している"
+    detail: |
+      DB 関数の `insertMessage` 説明では検証入口を `validateThreadRoot` と呼んでいる一方、WS 設計・スニペット・変更ファイル一覧では `resolveThreadRoot` に改名されています。設計文書内で同じ境界責務を別名で呼んでおり、実装者が古い名前で関数を追加する余地があります。
+    suggestion: |
+      `validateThreadRoot` の残存記述をすべて `resolveThreadRoot` に統一し、「検証して root 行を返す」責務に合わせて説明も更新してください。
+  - severity: medium
+    title: "room 用 parser を thread root id に流用しており ID ドメインが混線している"
+    detail: |
+      今回の差分で `parseRoomId` を `threadRootId` / `rootId` 検証にそのまま流用する契約が明文化されましたが、architect 観点では room id と message id/root id のドメインが別です。現時点では正の安全整数チェックとして動きますが、将来 `parseRoomId` に room 固有の制約やエラー前提が入ると thread root 検証へ意図せず波及します。
+    suggestion: |
+      共通の `parsePositiveSafeIntegerId` などを切り出し、`parseRoomId` と `resolveThreadRoot` の双方から使う構造にすると依存方向と命名が明確になります。
+  - severity: low
+    title: "getThreadMessages の防御意図と fixture 契約の境界がやや重複している"
+    detail: |
+      `getThreadMessages(db, rootId, roomId, limit)` は room 条件で破損データ混入を防ぐ一方、テスト fixture 契約では DB 直呼び時に整合データだけを作るとしています。両方とも妥当ですが、DB 層がどこまで破損データ耐性を持つ設計なのかが少し曖昧です。
+    suggestion: |
+      DB 層は不変条件を作らないが、読み取り側では room 境界だけ防御する、という方針を短く明記すると境界が読みやすくなります。

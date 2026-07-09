@@ -1,0 +1,237 @@
+diff --git a/features/3-task/plan-snapshots/plan.md.round-1 b/features/3-task/plan-snapshots/plan.md.round-2
+index e2a0549..16da3cb 100644
+--- a/features/3-task/plan-snapshots/plan.md.round-1
++++ b/features/3-task/plan-snapshots/plan.md.round-2
+@@ -35,23 +35,26 @@ labels: type:feature, batch:feature
+ `messages` に nullable な自己参照列を 1 本足すだけの最小拡張とする。
+ 
+ - `thread_root_id INTEGER REFERENCES messages(id)` — NULL: ルームタイムラインの通常メッセージ（スレッド root になり得る）。非 NULL: スレッド返信で、値は root メッセージ（`thread_root_id IS NULL` の行）の id。
+-- `CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)` — 返信件数集計・スレッド履歴取得用。
++- `idx_messages_thread_root` index（返信件数集計・スレッド履歴取得用）。**index の CREATE は SCHEMA_SQL に入れない**。SCHEMA_SQL は openDb 冒頭で常に exec されるため、v1 既存 DB では `thread_root_id` 列が無い時点で index 作成が `no such column` で失敗し、migration 分岐に到達できなくなる（Codex round 1 指摘）。index は user_version 分岐の**後**に全パス共通で `CREATE INDEX IF NOT EXISTS` する。
+ - スレッド返信にも root と同じ `room_id` を保存する。これにより room 単位 broadcast・`deleteRoom` の一括削除・ルーム分離がすべて既存機構のまま機能する。
+ 
+-`openDb` のマイグレーション分岐:
++`openDb` の処理順（重要: SCHEMA_SQL exec → version 分岐 → index 作成）:
+ 
+-- `user_version == 0`（新規 DB）: `thread_root_id` 込みの SCHEMA_SQL を exec 済みなので `user_version = 2` を設定するだけ
+-- `user_version == 1`（既存 DB）: `ALTER TABLE messages ADD COLUMN thread_root_id INTEGER REFERENCES messages(id)` → index 作成 → `user_version = 2`。既存行は `thread_root_id` NULL のまま（= 全部通常メッセージ）でデータ変換不要
+-- `user_version == 2`: 何もしない
++1. `SCHEMA_SQL` を exec（新規 DB は `thread_root_id` 込みの messages が作られる。既存 DB は `IF NOT EXISTS` で旧定義のまま）
++2. `user_version` 分岐:
++   - `== 0`（新規 DB）: フルスキーマ作成済みなので `user_version = 2` を設定するだけ
++   - `== 1`（既存 DB）: **transaction で括って** `ALTER TABLE messages ADD COLUMN thread_root_id INTEGER REFERENCES messages(id)` → `PRAGMA user_version = 2` → COMMIT。失敗時は ROLLBACK（SQLite は DDL も `PRAGMA user_version` もトランザクショナルなので、ALTER だけ成功して version が 1 のまま残る中間状態にならず、再実行可能性が保たれる）。防御として ALTER 前に `PRAGMA table_info(messages)` で `thread_root_id` の有無を確認し、既に在れば ALTER を skip して version 更新のみ行う（冪等化）
++   - `== 2`: 何もしない
++3. `CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)` を exec（この時点で全パスとも列が存在する）
+ 
+-SCHEMA_SQL は `IF NOT EXISTS` のため既存 DB では messages が旧定義のまま残る。ゆえに v1→v2 の ALTER が必須。順序は「ALTER → index → user_version 更新」とし、ALTER 失敗時に version が進まないことを保証する（ALTER の再実行は duplicate column エラーで顕在化するため、途中失敗はクラッシュで気づける）。
++既存行は `thread_root_id` NULL のまま（= 全部通常メッセージ）でデータ変換不要。
+ 
+ ### DB 関数（src/db.js）
+ 
+-- `insertMessage(db, roomId, author, body, threadRootId = null)` — 既存シグネチャ末尾に省略可能引数を追加。返す row に `thread_root_id` を含める。
+-- `getRecentMessages(db, roomId, limit)` — **契約変更**: `WHERE room_id = ? AND thread_root_id IS NULL` でタイムライン専用にし、各行に `thread_reply_count`（返信数）と `thread_last_reply_at`（最新返信の created_at、返信 0 件なら null）を LEFT JOIN + GROUP BY 集計で付与する。スレッド返信はタイムラインに出さない。
+-- `getThreadMessages(db, rootId, limit = 50)` — 新規。`WHERE thread_root_id = ?` を「内側 id DESC LIMIT → 外側 id ASC」の既存パターンで最新 limit 件返す。
+-- `getMessageById(db, messageId)` — 新規。root 検証（存在・room_id・thread_root_id が NULL か）に使う。
++- `insertMessage(db, roomId, author, body, threadRootId = null)` — 既存シグネチャ末尾に省略可能引数を追加。返す row に `thread_root_id` を含める。**責務注記**: `insertMessage` 自体は threadRootId の妥当性（同 room・root 性）を検証しない。検証は WS 層の `validateThreadRoot` が唯一の入口で、DB 関数を直接呼ぶテストコードは自分で整合を保つ契約とする。
++- `getRecentMessages(db, roomId, limit)` — **契約変更**: `WHERE room_id = ? AND thread_root_id IS NULL` でタイムライン専用にし、各行に `thread_reply_count`（返信数）と `thread_last_reply_at`（最新返信の created_at、返信 0 件なら null）を LEFT JOIN + GROUP BY 集計で付与する。スレッド返信はタイムラインに出さない。集計 JOIN は `ON r.thread_root_id = m.id AND r.room_id = m.room_id` とし、万一 room をまたぐ破損データが混入しても表示集計へ波及しない防御を入れる。行形状の統一のため `thread_root_id: null` も返す（ライブ broadcast row とキー集合を一致させる）。
++- `getThreadMessages(db, rootId, limit = 50)` — 新規。`WHERE thread_root_id = ?` を「内側 id DESC LIMIT → 外側 id ASC」の既存パターンで最新 limit 件返す。行形状は `{id, room_id, author, body, created_at, thread_root_id}`。
++- `getMessageById(db, messageId)` — 新規。`{id, room_id, author, body, created_at, thread_root_id}` を返す（存在しなければ undefined）。root 検証（存在・room_id・thread_root_id が NULL か）に使う。
+ 
+ ### WS プロトコル（src/server.js）
+ 
+@@ -68,6 +71,8 @@ SCHEMA_SQL は `IF NOT EXISTS` のため既存 DB では messages が旧定義
+ 
+ **配信** — `broadcastMessage` は変更なし（row に `thread_root_id` が乗るだけ）。スレッド返信も同ルーム全員に届き、受信側クライアントが `thread_root_id` の有無で「スレッドパネルに追記」か「タイムラインのバッジ更新」かを振り分ける。スレッド購読者管理をサーバーに持たない（Phase 1 の規模では room 単位配信で十分）。
+ 
++**broadcast 受信時のメタ更新契約（明文化）**: スレッド返信の broadcast row は `thread_root_id`（root の id）と `created_at` を必ず含む。受信クライアントは該当 root について `thread_reply_count += 1`、`thread_last_reply_at = row.created_at` としてローカル状態を更新する。history / room_switched で再取得した場合はサーバー集計値で上書きされるため、ライブ更新の誤差は再取得で自然回復する。
++
+ **スレッド履歴の取得** — 新 type:
+ 
+ ```json
+@@ -76,6 +81,7 @@ SCHEMA_SQL は `IF NOT EXISTS` のため既存 DB では messages が旧定義
+ 
+ - join 前は `not_joined`。`rootId` の検証は `validateThreadRoot` で同じ 4 条件 → `thread_not_found`。
+ - 成功時: `{ "type": "thread_history", "rootId": 123, "root": {root行}, "messages": [返信行... 最新50件 id昇順] }`
++- **root 行の形状契約**: `thread_history.root` は `getMessageById` の生形状（`thread_reply_count` / `thread_last_reply_at` のメタ**無し**）。スレッドパネルの root 表示はメタを使わない（返信数はパネル内の返信リスト自体が見えているため不要）という UI 契約とし、タイムライン行とあえて形状を揃えない。
+ 
+ **history / room_switched** — ペイロード形は変えず、`messages` の各行が `getRecentMessages` の新契約（タイムラインのみ + `thread_reply_count` / `thread_last_reply_at` 付き）になる。
+ 
+@@ -109,7 +115,7 @@ CREATE TABLE IF NOT EXISTS messages (
+ );
+ ```
+ 
+-after:
++after（index は SCHEMA_SQL に**入れない**。v1 既存 DB で列追加前に index 作成が走ると `no such column` で起動不能になるため）:
+ 
+ ```sql
+ CREATE TABLE IF NOT EXISTS messages (
+@@ -120,7 +126,6 @@ CREATE TABLE IF NOT EXISTS messages (
+   created_at INTEGER NOT NULL,
+   thread_root_id INTEGER REFERENCES messages(id)
+ );
+-CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id);
+ ```
+ 
+ ### src/db.js — openDb の user_version 分岐（before/after）
+@@ -143,13 +148,31 @@ after（イメージ）:
+   if (userVersion === 0) {
+     db.exec('PRAGMA user_version = 2');
+   } else if (userVersion === 1) {
+-    // ALTER → index → version 更新の順。ALTER 失敗時は version が 1 のまま残り再実行で顕在化する。
+-    db.exec('ALTER TABLE messages ADD COLUMN thread_root_id INTEGER REFERENCES messages(id)');
+-    db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
+-    db.exec('PRAGMA user_version = 2');
++    // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
++    // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
++    // 防御として列の有無も確認し冪等にする。
++    const hasColumn = db
++      .prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?')
++      .get('messages', 'thread_root_id');
++    db.exec('BEGIN');
++    try {
++      if (!hasColumn) {
++        db.exec('ALTER TABLE messages ADD COLUMN thread_root_id INTEGER REFERENCES messages(id)');
++      }
++      db.exec('PRAGMA user_version = 2');
++      db.exec('COMMIT');
++    } catch (err) {
++      db.exec('ROLLBACK');
++      throw err;
++    }
+   }
++
++  // index は列の存在が確定した後（全 version パス共通）に作成する。
++  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
+ ```
+ 
++（implementer への注記: `pragma_table_info` テーブル値関数が node:sqlite（Node 組み込みの SQLite バインディング）の prepare で使えない場合は `PRAGMA table_info(messages)` の all() 結果から `name === 'thread_root_id'` を探す形に置き換えてよい。また SQLite では DDL・`PRAGMA user_version` ともトランザクション内で ROLLBACK 可能であることを T35 相当のテストで担保する。）
++
+ ### src/db.js — insertMessage（before/after）
+ 
+ before:
+@@ -193,7 +216,31 @@ export function insertMessage(db, roomId, author, body, threadRootId = null) {
+ 
+ ### src/db.js — getRecentMessages（before/after）
+ 
+-before: `WHERE room_id = ?` のみ（スレッド返信も含む全メッセージ、集計なし）。
++before（現行の SQL 全体）:
++
++```js
++export function getRecentMessages(db, roomId, limit = 50) {
++  const rows = db
++    .prepare(
++      `SELECT * FROM (
++         SELECT id, room_id, author, body, created_at
++         FROM messages
++         WHERE room_id = ?
++         ORDER BY id DESC
++         LIMIT ?
++       )
++       ORDER BY id ASC`,
++    )
++    .all(roomId, limit);
++  return rows.map((row) => ({
++    id: Number(row.id),
++    room_id: Number(row.room_id),
++    author: row.author,
++    body: row.body,
++    created_at: Number(row.created_at),
++  }));
++}
++```
+ 
+ after（イメージ）:
+ 
+@@ -206,7 +253,7 @@ export function getRecentMessages(db, roomId, limit = 50) {
+                 COUNT(r.id) AS thread_reply_count,
+                 MAX(r.created_at) AS thread_last_reply_at
+          FROM messages m
+-         LEFT JOIN messages r ON r.thread_root_id = m.id
++         LEFT JOIN messages r ON r.thread_root_id = m.id AND r.room_id = m.room_id
+          WHERE m.room_id = ? AND m.thread_root_id IS NULL
+          GROUP BY m.id
+          ORDER BY m.id DESC
+@@ -221,12 +268,74 @@ export function getRecentMessages(db, roomId, limit = 50) {
+     author: row.author,
+     body: row.body,
+     created_at: Number(row.created_at),
++    thread_root_id: null, // タイムライン行は定義上 root のみ。broadcast row と形状を揃える
+     thread_reply_count: Number(row.thread_reply_count),
+     thread_last_reply_at: row.thread_last_reply_at === null ? null : Number(row.thread_last_reply_at),
+   }));
+ }
+ ```
+ 
++### src/db.js — getThreadMessages / getMessageById（新設スニペット）
++
++```js
++export function getThreadMessages(db, rootId, limit = 50) {
++  const rows = db
++    .prepare(
++      `SELECT * FROM (
++         SELECT id, room_id, author, body, created_at, thread_root_id
++         FROM messages
++         WHERE thread_root_id = ?
++         ORDER BY id DESC
++         LIMIT ?
++       )
++       ORDER BY id ASC`,
++    )
++    .all(rootId, limit);
++  return rows.map((row) => ({
++    id: Number(row.id),
++    room_id: Number(row.room_id),
++    author: row.author,
++    body: row.body,
++    created_at: Number(row.created_at),
++    thread_root_id: Number(row.thread_root_id),
++  }));
++}
++
++export function getMessageById(db, messageId) {
++  const row = db
++    .prepare('SELECT id, room_id, author, body, created_at, thread_root_id FROM messages WHERE id = ?')
++    .get(messageId);
++  if (!row) return undefined;
++  return {
++    id: Number(row.id),
++    room_id: Number(row.room_id),
++    author: row.author,
++    body: row.body,
++    created_at: Number(row.created_at),
++    thread_root_id: row.thread_root_id === null ? null : Number(row.thread_root_id),
++  };
++}
++```
++
++### src/server.js — validateThreadRoot（新設スニペット）
++
++```js
++/**
++ * threadRootId / rootId 入力を検証する。正整数（parseRoomId と同型）→ メッセージ存在
++ * → クライアントの現在ルームに属する → root 自体がスレッド返信でない、をすべて満たせば
++ * root の id を返す。どれか欠ければ null（呼び出し側で thread_not_found に変換）。
++ */
++function validateThreadRoot(db, roomId, value) {
++  const rootId = parseRoomId(value);
++  if (rootId === null) return null;
++  const root = getMessageById(db, rootId);
++  if (!root) return null;
++  if (root.room_id !== roomId) return null;
++  if (root.thread_root_id !== null) return null;
++  return rootId;
++}
++```
++
+ ### src/server.js — message ハンドラ（before/after）
+ 
+ before:
+@@ -314,7 +423,7 @@ acceptance test は `tests/threads.test.js` に新設。rooms.test.js の inbox
+ | T32_thread_realtime | 同ルームの別クライアントがスレッド返信を受信 | `type: 'message'` で届き `thread_root_id` が root の id |
+ | T33_timeline_thread_meta | 返信 2 件後の history / room_switched | root 行に `thread_reply_count: 2`・`thread_last_reply_at`（最後の返信の created_at）。返信 0 件の行は count 0 / null。スレッド返信自体はタイムライン messages に不在 |
+ | T34_boundary_thread_validation | 存在しない id / 文字列 "1" / 小数 / 0 / 他ルームの root / 返信 id へのネスト返信、join 前の open_thread | 前 6 者は `thread_not_found` で messages 行数不変。join 前は `not_joined` |
+-| T35_migration_v1_to_v2 | 旧スキーマ（thread_root_id なし・user_version=1）の DB を手組みし `openDb` | user_version が 2 になり、既存行が `thread_reply_count: 0` で読め、スレッド返信を挿入できる |
++| T35_migration_v1_to_v2 | 旧スキーマ（thread_root_id なし・user_version=1）の DB を手組みし `openDb` | user_version が 2 になり、既存行が `thread_reply_count: 0` で読め、スレッド返信を挿入できる。同じ DB を再度 `openDb` しても壊れない（冪等）。さらに「列あり・user_version=1」の中間状態 DB でも openDb が成功し version 2 になる |
+ | T36_thread_room_isolation | ルームA の root へのスレッド返信 | ルームB 在室クライアントには届かない（timeout レース） |
+ | T37_thread_persistence | 返信投稿後にサーバー close → `openDb` し直す | `getThreadMessages` で返信が残っている |
+ 
