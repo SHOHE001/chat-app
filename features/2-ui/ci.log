@@ -1,0 +1,140 @@
+TAP version 13
+# (node:3793291) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: T01 2つのWSクライアント間でメッセージがリアルタイム配信される
+ok 1 - T01 2つのWSクライアント間でメッセージがリアルタイム配信される
+  ---
+  duration_ms: 430.657563
+  type: 'test'
+  ...
+# Subtest: T02 入室時に直近履歴を id 昇順で受信する
+ok 2 - T02 入室時に直近履歴を id 昇順で受信する
+  ---
+  duration_ms: 474.768895
+  type: 'test'
+  ...
+# Subtest: T03_boundary 空白のみ body は保存もブロードキャストもされない
+ok 3 - T03_boundary 空白のみ body は保存もブロードキャストもされない
+  ---
+  duration_ms: 499.185122
+  type: 'test'
+  ...
+# Subtest: T04_persistence DBを閉じて再オープンしても履歴が残る
+ok 4 - T04_persistence DBを閉じて再オープンしても履歴が残る
+  ---
+  duration_ms: 310.034807
+  type: 'test'
+  ...
+# Subtest: T05_boundary join せずに message を送ると error が返り保存されない
+ok 5 - T05_boundary join せずに message を送ると error が返り保存されない
+  ---
+  duration_ms: 280.274842
+  type: 'test'
+  ...
+# Subtest: T06_boundary 2001文字以上のbodyは2000文字に切り詰められる
+ok 6 - T06_boundary 2001文字以上のbodyは2000文字に切り詰められる
+  ---
+  duration_ms: 372.286293
+  type: 'test'
+  ...
+# Subtest: T07_boundary 不正なnicknameでのjoinはbad_nicknameで拒否される
+ok 7 - T07_boundary 不正なnicknameでのjoinはbad_nicknameで拒否される
+  ---
+  duration_ms: 219.718013
+  type: 'test'
+  ...
+# Subtest: T08_boundary 8KB超のフレームはtoo_largeで拒否され接続は維持される
+ok 8 - T08_boundary 8KB超のフレームはtoo_largeで拒否され接続は維持される
+  ---
+  duration_ms: 307.85315
+  type: 'test'
+  ...
+# Subtest: T09_boundary 静的配信のtraversal/不正エンコードが拒否される
+ok 9 - T09_boundary 静的配信のtraversal/不正エンコードが拒否される
+  ---
+  duration_ms: 264.825452
+  type: 'test'
+  ...
+# Subtest: T10_boundary root外を指すsymlink経由のアクセスは403で拒否される
+ok 10 - T10_boundary root外を指すsymlink経由のアクセスは403で拒否される
+  ---
+  duration_ms: 227.931479
+  type: 'test'
+  ...
+# (node:3793292) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: T11_admin_auth 正しい合言葉でadmin_auth_ok、誤った合言葉でbad_admin_password
+ok 11 - T11_admin_auth 正しい合言葉でadmin_auth_ok、誤った合言葉でbad_admin_password
+  ---
+  duration_ms: 277.371805
+  type: 'test'
+  ...
+# Subtest: T12_boundary_admin_disabled adminPassword未設定サーバーでは正しい値でもadmin_disabled
+ok 12 - T12_boundary_admin_disabled adminPassword未設定サーバーでは正しい値でもadmin_disabled
+  ---
+  duration_ms: 230.368466
+  type: 'test'
+  ...
+# Subtest: T13_boundary_forbidden 未認証クライアントのcreate_room/delete_roomはforbiddenでDB変化なし
+ok 13 - T13_boundary_forbidden 未認証クライアントのcreate_room/delete_roomはforbiddenでDB変化なし
+  ---
+  duration_ms: 291.999809
+  type: 'test'
+  ...
+# Subtest: T14_create_room 管理者のcreate_roomで全クライアントにroomsがブロードキャストされる（join直後はhistory→rooms順、要素は{id,name}のみ）
+ok 14 - T14_create_room 管理者のcreate_roomで全クライアントにroomsがブロードキャストされる（join直後はhistory→rooms順、要素は{id,name}のみ）
+  ---
+  duration_ms: 353.100715
+  type: 'test'
+  ...
+# Subtest: T15_boundary_room_name 空名・33文字・制御文字入りはbad_room_name、重複名はroom_exists
+ok 15 - T15_boundary_room_name 空名・33文字・制御文字入りはbad_room_name、重複名はroom_exists
+  ---
+  duration_ms: 192.072499
+  type: 'test'
+  ...
+# Subtest: T16_boundary_delete_default デフォルトルーム削除はcannot_delete_default、型不正idはroom_not_found、いずれもルームは残る
+ok 16 - T16_boundary_delete_default デフォルトルーム削除はcannot_delete_default、型不正idはroom_not_found、いずれもルームは残る
+  ---
+  duration_ms: 263.417497
+  type: 'test'
+  ...
+# Subtest: T17_delete_room 管理者の削除でroomsから消えmessagesも消える、存在しないidはroom_not_found
+ok 17 - T17_delete_room 管理者の削除でroomsから消えmessagesも消える、存在しないidはroom_not_found
+  ---
+  duration_ms: 459.387224
+  type: 'test'
+  ...
+# Subtest: T18_delete_room_eviction 在室者は削除時にroom_switched（デフォルトルーム履歴付き）を受信し以後デフォルトルームの新着を受ける
+ok 18 - T18_delete_room_eviction 在室者は削除時にroom_switched（デフォルトルーム履歴付き）を受信し以後デフォルトルームの新着を受ける
+  ---
+  duration_ms: 542.339903
+  type: 'test'
+  ...
+# Subtest: T19_switch_room 正常系はroom_switched+履歴（id昇順・最大50件）、join前はnot_joined、不明id/型不正はroom_not_found
+ok 19 - T19_switch_room 正常系はroom_switched+履歴（id昇順・最大50件）、join前はnot_joined、不明id/型不正はroom_not_found
+  ---
+  duration_ms: 457.897977
+  type: 'test'
+  ...
+# Subtest: T20_isolation ルームA在室者の発言はA在室者だけに届きB在室者には届かない
+ok 20 - T20_isolation ルームA在室者の発言はA在室者だけに届きB在室者には届かない
+  ---
+  duration_ms: 615.541415
+  type: 'test'
+  ...
+# Subtest: T21_room_persistence 作成したルームと投稿がDB再オープン後も残る
+ok 21 - T21_room_persistence 作成したルームと投稿がDB再オープン後も残る
+  ---
+  duration_ms: 222.389819
+  type: 'test'
+  ...
+1..21
+# tests 21
+# suites 0
+# pass 21
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4086.888622

@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: contrarian
+summary: |
+  Round 2 の差分で追加された roomId 正規化は、前 round の型すり抜け問題を概ね潰しており、現時点で設計を止める critical/high は見当たりません。ただし、新しく追加された `roomsPayload()` 方針と実装骨子・テスト記述の間に小さな不整合が残っています。
+findings:
+  - severity: medium
+    title: "`roomsPayload()` 方針と join 実装骨子が矛盾している"
+    detail: |
+      DB 関数の節では `listRooms(db)` の結果を server.js 側の `roomsPayload()` で `{id, name}` に整形すると追記されていますが、後続の join ハンドラ骨子は `sendJson(ws, { type: 'rooms', rooms: listRooms(db) });` のままです。このまま実装者が骨子に従うと `created_at` が WS プロトコルに漏れ、追加された設計方針とプロトコル一覧 `rooms: [{id,name}]` に反します。クライアントが壊れるほどではないため blocking ではありませんが、計画内の single source of truth が割れています。
+    suggestion: |
+      join 骨子を `sendJson(ws, { type: 'rooms', rooms: roomsPayload(db) });` または `roomsPayload(listRooms(db))` のように修正し、CRUD 成功時のブロードキャストも同じ helper を使うと明記してください。
+    file: "plan.md"
+    line: 174
+  - severity: medium
+    title: "T14 の互換性検証対象が説明とずれている"
+    detail: |
+      互換注記では T14 で「join 直後のクライアントが history の後に rooms を受信しても正常動作する」ことを兼ねて検証するとありますが、T14 の表上の内容は管理者の `create_room` による `rooms` ブロードキャスト確認です。join 時に 2 通目が増える変更の互換性は、T14 の現在の期待値だけでは直接検証されません。
+    suggestion: |
+      T14 に join 直後の `history` → `rooms` 受信順を明示的に含めるか、別テストとして `T14_join_rooms_compat` のように分けてください。
+    file: "plan.md"
+    line: 116
+  - severity: low
+    title: "型不正のエラーをすべて `room_not_found` に寄せる設計はデバッグ性が低い"
+    detail: |
+      `parseRoomId` が null を返した場合に `bad_room_id` ではなく `room_not_found` を返す方針は、情報露出を抑える単純案としては成立します。一方で、フロント実装ミスで文字列 id を送っている場合も存在しない部屋と区別できず、開発時の原因切り分けは弱くなります。これは仕様選択の範囲であり blocking ではありません。
+    suggestion: |
+      現方針を維持するなら、サーバー側テスト名またはコメントに「型不正も intentionally `room_not_found`」と残してください。開発デバッグを優先するなら `bad_room_id` を別 reason として追加する案もあります。
+    file: "plan.md"
+    line: 58

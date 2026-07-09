@@ -1,0 +1,22 @@
+verdict: fail
+blocking: 1
+persona: contrarian
+summary: |
+  CI は green ですが、削除処理の在室者退避パスに WebSocket 状態チェックがなく、切断中クライアントが混じるだけで管理操作が例外中断し得ます。機能追加の大半は plan に沿っていますが、この一点は CRUD 成功時のブロードキャスト保証を崩します。
+findings:
+  - severity: high
+    title: "ルーム削除時の退避送信が OPEN 状態を確認せず例外中断し得る"
+    detail: |
+      delete_room 成功後、削除対象ルームにいる全 client に sendJson(client, { type: 'room_switched', ... }) を無条件で呼んでいます。wss.clients には close ハンドシェイク中の CLOSING/CLOSED 相当の接続が残り得るため、送信が失敗すると delete_room ハンドラ全体が例外で中断し、後続の broadcastRooms() が実行されません。DB 上は既に rooms/messages が削除済みなので、他クライアントへルーム一覧更新が届かない不整合になります。broadcastMessage/broadcastRooms では readyState を見ているので、ここだけ防御が抜けています。
+    suggestion: |
+      退避対象の client についても client.readyState === WebSocket.OPEN を確認してから sendJson してください。送信不能な接続は roomId だけ更新するか無視し、DB 削除後の broadcastRooms() は必ず実行される構造にしてください。可能なら CLOSING 接続を混ぜた削除テストを追加してください。
+    file: "src/server.js"
+    line: 355
+  - severity: medium
+    title: "管理者 UI がデフォルトルームにも削除ボタンを出して不要な失敗操作を誘導する"
+    detail: |
+      renderRooms() は isAdmin なら全ルームに削除ボタンを付けますが、仕様上デフォルトルーム「全体」は削除不可です。サーバー側で cannot_delete_default は返るため破壊的バグではありませんが、UI は実行不能な操作を常時表示し、毎回 alert エラーに落とします。
+    suggestion: |
+      rooms 受信時に current/default を判定できないなら、少なくとも名前が「全体」のルームでは削除ボタンを出さない、または server から defaultRoomId を含める設計に寄せて UI 側で不可操作を非表示/disabled にしてください。
+    file: "public/app.js"
+    line: 117

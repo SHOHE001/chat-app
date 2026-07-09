@@ -1,0 +1,66 @@
+diff --git a/features/2-ui/plan-snapshots/plan.md.round-1 b/features/2-ui/plan-snapshots/plan.md.round-2
+index 5856215..351b99f 100644
+--- a/features/2-ui/plan-snapshots/plan.md.round-1
++++ b/features/2-ui/plan-snapshots/plan.md.round-2
+@@ -48,12 +48,28 @@ labels: type:feature, batch:feature
+   - 重複（rooms.name の UNIQUE 制約違反）は `room_exists`
+   - 成功時: 全クライアントへ `{type: 'rooms', rooms}` をブロードキャスト
+ - `{type: 'delete_room', roomId}`（要 isAdmin）
++  - `roomId` は共通の `parseRoomId` で正規化してから判定する（下記「roomId 入力の正規化」）
+   - デフォルトルーム「全体」の id なら `cannot_delete_default`
+   - 存在しない id なら `room_not_found`
+   - 成功時: トランザクションで該当ルームの messages を DELETE → rooms を DELETE
+   - 削除ルーム在室中のクライアントは `ws.roomId` をデフォルトルーム id に書き換え、`{type: 'room_switched', roomId, messages}`（デフォルトルームの履歴付き）を送って強制移動
+   - 全クライアントへ `{type: 'rooms', rooms}` をブロードキャスト
+ 
++### roomId 入力の正規化（Codex design round 1 反映）
++
++WS payload の `roomId` は外部入力なので、`delete_room` / `switch_room` の両方で共通のバリデータを最初に通す:
++
++```js
++// number 型かつ正の安全な整数のみ受理。それ以外（文字列 "1"・小数・null・配列など）は null を返す。
++function parseRoomId(value) {
++  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) return null;
++  return value;
++}
++```
++
++- `parseRoomId` が null を返したら即 `room_not_found`（型の違いによる default 判定すり抜けを構造的に防ぐ。文字列 `"1"` を数値に暗黙変換して SQLite に渡すことはしない）
++- default 判定・存在確認・DELETE はすべて正規化済みの同じ値で行う
++
+ ### ルーム切替と配信分離
+ 
+ - 接続ごとに `ws.roomId` を保持。`join` 成功時にデフォルトルーム id をセットする。
+@@ -67,7 +83,7 @@ labels: type:feature, batch:feature
+ 
+ ### DB 関数の追加（src/db.js）
+ 
+-- `listRooms(db)` → `[{id, name, created_at}]` を id 昇順で返す
++- `listRooms(db)` → `[{id, name, created_at}]` を id 昇順で返す。WS へ送るときは server.js 側の `roomsPayload()` で `{id, name}` に整形する（`created_at` はクライアントに露出させない。DB 関数とプロトコルの形の差はこの整形関数が吸収する）
+ - `createRoom(db, name)` → 挿入行を返す。UNIQUE 違反は throw のまま（呼び出し側で捕捉して `room_exists` に変換）
+ - `deleteRoom(db, roomId)` → トランザクション（`BEGIN`〜`COMMIT`、失敗時 `ROLLBACK`）で messages → rooms を DELETE。rooms の削除行数を返す
+ - `getRoomById(db, roomId)` → 行 or undefined（switch_room / delete_room の存在検証用）
+@@ -95,7 +111,9 @@ labels: type:feature, batch:feature
+ | S→C | `rooms` | `rooms: [{id,name}]` | 新規・join 時 + CRUD 成功時に全員へ |
+ | S→C | `room_switched` | `roomId, messages` | 新規・切替成功/強制移動時 |
+ | S→C | `history` | `roomId, messages` | 変更: `roomId` を追加（join 時） |
+-| S→C | `error` | `reason` | 追加 reason: `forbidden` / `bad_admin_password` / `admin_disabled` / `bad_room_name` / `room_exists` / `room_not_found` / `cannot_delete_default` |
++| S→C | `error` | `reason` | 追加 reason: `forbidden` / `bad_admin_password` / `admin_disabled` / `bad_room_name` / `room_exists` / `room_not_found` / `cannot_delete_default`。既存 reason `not_joined` は `switch_room`（join 前）にも利用範囲を広げる |
++
++既存クライアント互換の注記: 現行 `public/app.js` の message dispatcher は `history` / `message` / `error` 以外の type を無視する（if/else if 構成で該当なしは何もしない）ため、`rooms` / `room_switched` の追加送信は旧クライアントを壊さない。本 Issue では app.js 自体も同時に更新するため実運用での新旧混在は起きないが、サーバー側テスト T14 で「join 直後のクライアントが history の後に rooms を受信しても正常動作する」ことを兼ねて検証する。
+ 
+ ## 実装対象
+ 
+@@ -222,10 +240,10 @@ if (parsed.type === 'join') {
+ | T13_boundary_forbidden | 未認証クライアントが `create_room` / `delete_room` | 両方 `error: forbidden`、DB のルーム一覧に変化なし |
+ | T14_create_room | 管理者が `create_room` | 管理者・非管理者の全クライアントに `rooms` がブロードキャストされ新ルームを含む |
+ | T15_boundary_room_name | 空名・33 文字・制御文字入り・重複名で `create_room` | 前三者は `error: bad_room_name`、重複は `error: room_exists` |
+-| T16_boundary_delete_default | デフォルトルーム「全体」を `delete_room` | `error: cannot_delete_default`、ルームは残る |
++| T16_boundary_delete_default | デフォルトルーム「全体」を `delete_room`（number の id、文字列 `"<defaultId>"`、小数、null、配列の各形で） | number は `error: cannot_delete_default`、それ以外の型は `error: room_not_found`。いずれもルームは残る |
+ | T17_delete_room | 管理者が空きルームを `delete_room` / 存在しない id を指定 | 成功時 `rooms` から消え DB の該当 messages も 0 件。存在しない id は `error: room_not_found` |
+ | T18_delete_room_eviction | 在室者のいるルームを削除 | 在室クライアントが `room_switched`（デフォルトルーム履歴付き）を受信し、以後デフォルトルームの新着を受信する |
+-| T19_switch_room | `switch_room` 正常系 + join 前 + 存在しない roomId | 正常系は `room_switched` とそのルームの履歴（id 昇順・最大 50 件）。join 前は `not_joined`、不明 id は `room_not_found` |
++| T19_switch_room | `switch_room` 正常系 + join 前 + 存在しない roomId + 型不正（文字列 id・小数・null） | 正常系は `room_switched` とそのルームの履歴（id 昇順・最大 50 件）。join 前は `not_joined`、不明 id と型不正は `room_not_found` |
+ | T20_isolation | ルーム A 在室者の発言 | ルーム A 在室者にだけ届き、ルーム B 在室者には届かない |
+ | T21_room_persistence | ルーム作成・投稿後に DB を閉じて再オープン | ルームとメッセージが残っている |
+ 

@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: architect
+summary: |
+  Round 2 の追加差分は、前回の主要な型正規化・protocol 整形の穴を概ね塞いでいます。critical/high として実装を止めるほどの設計破綻は見当たりませんが、`roomsPayload()` 導入方針と実装骨子・テスト計画の間にまだ小さな不整合があります。
+findings:
+  - severity: medium
+    title: "`roomsPayload()` 方針と join 実装骨子が矛盾している"
+    detail: |
+      DB 関数の説明では `listRooms(db)` は `{id, name, created_at}` を返し、WS へ送るときは `server.js` 側の `roomsPayload()` で `{id, name}` に整形すると明記されています。しかし join ハンドラの after 骨子は `sendJson(ws, { type: 'rooms', rooms: listRooms(db) });` のままで、設計方針どおりに実装すると `created_at` をクライアントへ露出しない一方、骨子どおりに実装すると露出します。プロトコル一覧の `rooms: [{id,name}]` とも不整合です。
+    suggestion: |
+      join 骨子を `sendJson(ws, { type: 'rooms', rooms: roomsPayload(db) });` または `rooms: roomsPayload(listRooms(db))` のように修正し、CRUD 後のブロードキャストも同じ整形関数を使うことを明記してください。
+    file: "plan.md"
+    line: 153
+  - severity: medium
+    title: "`created_at` 非露出の設計がテストで固定されていない"
+    detail: |
+      Round 2 で `created_at` はクライアントに露出させないという境界が追加されましたが、T14 は「新ルームを含む」ことしか期待しておらず、protocol shape が `{id,name}` に限定されることを検証していません。DB 層と WS protocol 層の境界を守る設計判断なので、ここがテストされないと将来 `listRooms(db)` をそのまま送る退行が通ります。
+    suggestion: |
+      T14 または別テストで `rooms` payload の各要素が `id` と `name` のみを持ち、`created_at` を含まないことを期待値に追加してください。
+    file: "plan.md"
+    line: 238
+  - severity: low
+    title: "互換性注記の検証対象が曖昧"
+    detail: |
+      互換性注記では旧クライアントが未知 type を無視するため壊れないと説明していますが、T14 の説明は `rooms` ブロードキャストの受信確認であり、旧 dispatcher が未知 type を無視すること自体を直接検証する内容にはなっていません。実装を止める問題ではありませんが、注記とテストの対応がややずれています。
+    suggestion: |
+      互換性をテストで主張するなら、旧 dispatcher 相当の処理が `rooms` / `room_switched` を無視して例外や状態破壊を起こさないことを明示するか、注記から「T14 で兼ねて検証する」という表現を弱めてください。
+    file: "plan.md"
+    line: 113

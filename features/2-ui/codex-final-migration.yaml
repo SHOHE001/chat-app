@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: migration
+summary: |
+  critical/high の後方互換破壊は見つかりません。サーバー側の追加プロトコルは既存 join の 1 通目 history を維持しており、管理機能未設定時も安全側に倒れています。
+findings:
+  - severity: medium
+    title: "デフォルトルームにも削除ボタンが表示される"
+    detail: |
+      管理者 UI では全 room に対して削除ボタンを描画しており、デフォルトルーム「全体」にも削除操作が出ます。サーバーは cannot_delete_default で拒否するためデータ破壊はありませんが、既存利用者には実行できない操作が表示される移行後 UX になります。
+    suggestion: |
+      rooms payload に default 判定を追加しない方針なら、クライアント側で room.name === '全体' もしくは current/default roomId を保持してデフォルトルームの削除ボタンを非表示にしてください。
+    file: "public/app.js"
+    line: 116
+  - severity: medium
+    title: "管理者再認証の失敗表示が未ログイン画面の背後に出る可能性"
+    detail: |
+      保存済み sessionStorage の admin password を open 直後に join より先へ送るため、bad_admin_password/admin_disabled が history より先に届くと adminLoginError へ表示されます。ただし chat screen はまだ hidden のため、利用者は認証失敗を見ないまま通常ログイン後に状態だけ降格されます。移行後の再接続時に管理者 UI が消えた理由が分かりにくくなります。
+    suggestion: |
+      自動再認証時の失敗は showChat 後にも見える状態に保持する、または join 完了後に admin_auth を送る順序へ変更してください。
+    file: "public/app.js"
+    line: 163
+  - severity: low
+    title: "T19 が最大 50 件制限を実際には検証していない"
+    detail: |
+      テスト名と計画では switch_room の履歴が最大 50 件であることを検証するとされていますが、投入しているメッセージは 2 件だけです。実装は HISTORY_LIMIT を渡しているため現状のリスクは低いものの、テストの主張よりアサーションが弱いです。
+    suggestion: |
+      対象ルームに 51 件以上投入し、room_switched.messages.length === 50 と末尾 50 件が id 昇順で返ることを追加で確認してください。
+    file: "tests/rooms.test.js"
+    line: 359

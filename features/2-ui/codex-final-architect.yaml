@@ -1,0 +1,30 @@
+verdict: fail
+blocking: 1
+persona: architect
+summary: |
+  ルーム機能の主要な構造は plan に沿っていますが、削除時の強制移動だけ既存の送信境界を外れており、切断中クライアントで管理操作全体が例外化し得ます。CI は通常系中心で、この接続状態のエッジを拾えていません。
+findings:
+  - severity: high
+    title: "ルーム削除時の強制移動が WebSocket.OPEN を確認せず送信している"
+    detail: |
+      `broadcastMessage`/`broadcastRooms` は既存パターン通り `client.readyState === WebSocket.OPEN` を確認していますが、削除ルーム在室者への `room_switched` 送信ループだけ readyState を見ずに `sendJson(client, ...)` しています。削除対象ルームに CLOSING/CLOSED の接続が残っているタイミングで管理者が `delete_room` すると `ws.send` が例外になり、DB 削除後かつ `broadcastRooms()` 前で処理が中断し得ます。結果として他クライアントへルーム一覧更新が配信されない、管理操作が失敗扱いになる、プロセスのエラーハンドリング次第でクラッシュするリスクがあります。
+    suggestion: |
+      強制移動ループも既存ブロードキャスト関数と同じく `client.readyState === WebSocket.OPEN` を条件に含めてください。あわせて、削除対象ルームにいるクライアントが close 中でも `delete_room` が完了し `rooms` がブロードキャストされるテストを追加してください。
+    file: "src/server.js"
+    line: 360
+  - severity: medium
+    title: "ルーム状態遷移ロジックが server.js に散在している"
+    detail: |
+      `join`、`switch_room`、`delete_room` の強制移動で `ws.roomId` 更新、履歴取得、`history`/`room_switched` 送信がそれぞれ直接実装されています。今回の差分内でも readyState チェック漏れのように送信境界が揺れており、今後 rename や権限付きルームを追加する際に同種の不整合が増えやすい構造です。
+    suggestion: |
+      この Issue 内で大きく抽象化する必要はありませんが、少なくとも `sendRoomSwitched(ws, roomId)` や `moveClientToRoom(ws, roomId)` のような小さな helper に寄せ、OPEN チェックを呼び出し側で統一するのが妥当です。
+    file: "src/server.js"
+    line: 355
+  - severity: low
+    title: "管理者 UI がデフォルトルームにも削除ボタンを表示する"
+    detail: |
+      サーバーは `cannot_delete_default` で安全に拒否しますが、UI は全ルームに削除ボタンを描画するため、削除不可という仕様が画面上で表現されていません。ユーザーが当然失敗する操作を実行できる形になっています。
+    suggestion: |
+      デフォルトルームを識別できる情報をクライアント側に持つか、最低限 `room.name === '全体'` の場合は削除ボタンを出さないなど、UI とサーバー制約を揃えてください。
+    file: "public/app.js"
+    line: 107

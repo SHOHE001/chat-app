@@ -1,0 +1,27 @@
+{
+  "created_at": "2026-07-09T04:49:37.724Z",
+  "issue": 2,
+  "slug": "ui",
+  "phases": {
+    "design_review": "pending",
+    "acceptance_skeleton": "passed",
+    "core_impl": "pending",
+    "glm_impl": "pending",
+    "final_review": "pending",
+    "codex_review": "pending",
+    "merge": "pending"
+  },
+  "loops": {
+    "design_loops": 1,
+    "codex_loops": 3,
+    "glm_runs": 0
+  },
+  "raised_issues": [],
+  "updated_at": "2026-07-09T05:14:09.436Z",
+  "design_review": "passed",
+  "core_impl": "passed",
+  "warned_at": {
+    "codex_loops.warn": "2026-07-09T05:12:19.112Z"
+  },
+  "final_review": "passed"
+}

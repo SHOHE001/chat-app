@@ -1,0 +1,27 @@
+verdict: pass
+blocking: 0
+persona: migration
+summary: |
+  Round 2 addresses the prior roomId normalization compatibility/safety gap well enough that I do not see a critical/high migration blocker. Remaining issues are consistency and test-coverage mismatches that could cause implementation drift but are not concrete backward-compatibility breaks by themselves.
+findings:
+  - severity: medium
+    title: "`roomsPayload()`方針とjoin実装骨子が不一致"
+    detail: |
+      Round 2で`listRooms(db)`は`created_at`を含み、WS送信時は`roomsPayload()`で`{id,name}`に整形すると追記された一方、`join`ハンドラのafter骨子はまだ`sendJson(ws, { type: 'rooms', rooms: listRooms(db) });`のままです。実装者が骨子に従うとプロトコル表の`rooms: [{id,name}]`と食い違い、クライアントへ`created_at`が露出します。既存クライアント破壊までは確認できないためblockingではありませんが、public protocolの移行仕様として曖昧です。
+    suggestion: |
+      `join`骨子を`rooms: roomsPayload(db)`または`rooms: roomsPayload(listRooms(db))`のように修正し、CRUD成功時のブロードキャストも同じ整形関数を使うと明記してください。
+    file: "plan.md"
+  - severity: medium
+    title: "互換性注記がT14に依存しているがT14の期待値と一致しない"
+    detail: |
+      互換性注記ではT14で「join直後のクライアントがhistoryの後にroomsを受信しても正常動作する」ことを検証するとしていますが、テスト計画のT14は管理者の`create_room`による`rooms`ブロードキャスト確認です。join時に2通送る移行互換性は別経路なので、現状のT14だけでは検証されません。
+    suggestion: |
+      T14の内容にjoin直後の`history`→`rooms`順序確認を明示するか、別テストIDを追加してください。
+    file: "plan.md"
+  - severity: low
+    title: "型不正roomIdを`room_not_found`に畳み込む仕様は移行時の診断性が低い"
+    detail: |
+      `parseRoomId`がnullを返した場合に即`room_not_found`へ統一する設計は安全側で一貫していますが、クライアント移行中に文字列IDを送っているバグと本当に存在しないIDの区別がつきません。既存APIではないため互換破壊ではありません。
+    suggestion: |
+      必要ならサーバーログだけに型不正を記録する、またはテスト名・コメントで意図的に`room_not_found`へ畳み込むことを明確にしてください。
+    file: "plan.md"

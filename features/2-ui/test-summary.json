@@ -1,0 +1,10 @@
+{
+  "framework": "node:test",
+  "command": "node --test",
+  "total": 21,
+  "pass": 21,
+  "fail": 0,
+  "skipped": 0,
+  "new_tests": ["T11_admin_auth", "T12_boundary_admin_disabled", "T13_boundary_forbidden", "T14_create_room", "T15_boundary_room_name", "T16_boundary_delete_default", "T17_delete_room", "T18_delete_room_eviction", "T19_switch_room", "T20_isolation", "T21_room_persistence"],
+  "regression_suite": "tests/chat.test.js (T01-T10, unchanged, green)"
+}
