@@ -1,0 +1,22 @@
+verdict: fail
+blocking: 1
+persona: contrarian
+summary: |
+  チャット機能の実装に必要ない `.claude` のガード緩和が混入しており、plan の「既存編集は .gitignore 追記のみ」を破っています。機能実装より広い権限変更なので、このまま通すべきではありません。
+findings:
+  - severity: high
+    title: "Non-Goal 変更: orchestrator の src/lib 書き込み禁止を解除している"
+    detail: |
+      `.claude/gloop-config.json` で `deny_orchestrator_write` が `["src/**", "lib/**"]` から空配列に変更されています。この Issue の実装対象は新規チャットファイル群と `.gitignore` 追記のみで、既存設定の権限モデル変更は plan 外です。チャット機能に不要なうえ、以後の自動化が `src/**` / `lib/**` を直接変更できるようになり、レビュー境界と安全装置を弱めます。
+    suggestion: |
+      この変更を差分から外し、`.claude/gloop-config.json` は元の `deny_orchestrator_write` を維持してください。チャット実装に必要な例外が本当にあるなら、別 Issue で目的・対象パス・期間を限定して扱うべきです。
+    file: ".claude/gloop-config.json"
+    line: 10
+  - severity: medium
+    title: "生成レビュー/CI成果物が大量にコミット対象へ混入している"
+    detail: |
+      `features/1-core-realtime-chat/ci.log`、各 persona の verdict、plan snapshot/diff などが多数追加されていますが、plan の実装対象には含まれていません。アプリ本体の変更とレビューパイプライン成果物が同じ差分に混ざると、実装レビューのノイズが増え、将来の履歴も追いにくくなります。
+    suggestion: |
+      成果物をコミットする運用が明示されていない限り、アプリ実装差分から分離するか、必要最小限の追跡対象だけに絞ってください。
+    file: "features/1-core-realtime-chat/ci.log"
+    line: 1

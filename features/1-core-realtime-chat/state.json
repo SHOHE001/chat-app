@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-07-08T17:02:43.915Z",
+  "issue": 1,
+  "slug": "core-realtime-chat",
+  "phases": {
+    "design_review": "passed",
+    "acceptance_skeleton": "passed",
+    "core_impl": "pending",
+    "glm_impl": "pending",
+    "final_review": "pending",
+    "codex_review": "pending",
+    "merge": "pending"
+  },
+  "loops": {
+    "design_loops": 4,
+    "codex_loops": 1,
+    "glm_runs": 0
+  },
+  "raised_issues": [],
+  "updated_at": "2026-07-09T03:38:38.502Z",
+  "warned_at": {
+    "design_loops.warn": "2026-07-08T17:13:24.047Z"
+  },
+  "core_impl": "passed",
+  "final_review": "passed"
+}

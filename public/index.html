@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>チャット</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="join-overlay" class="overlay">
+    <form id="join-form" class="join-form">
+      <h1>ニックネームを入力</h1>
+      <input
+        id="nickname-input"
+        type="text"
+        maxlength="32"
+        placeholder="ニックネーム"
+        autocomplete="off"
+        required
+      />
+      <button type="submit">入室</button>
+      <p id="join-error" class="error" role="alert"></p>
+    </form>
+  </div>
+
+  <div id="chat-screen" class="chat-screen hidden">
+    <header class="chat-header">
+      <span id="room-name">全体</span>
+      <span id="connection-status" class="status"></span>
+    </header>
+    <ul id="message-list" class="message-list"></ul>
+    <form id="message-form" class="message-form">
+      <input
+        id="message-input"
+        type="text"
+        maxlength="2000"
+        placeholder="メッセージを入力"
+        autocomplete="off"
+      />
+      <button type="submit">送信</button>
+    </form>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

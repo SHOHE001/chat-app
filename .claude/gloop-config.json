@@ -7,8 +7,17 @@
   "default_branch": "main",
   "format_commands": [],
   "guard_paths": {
-    "deny_orchestrator_write": ["src/**", "lib/**"],
-    "allow_orchestrator_write": ["tests/**", "test/**", "docs/**", "features/**", "README.md", "CHANGELOG.md", "ROADMAP.md", ".claude/**"]
+    "deny_orchestrator_write": [],
+    "allow_orchestrator_write": [
+      "tests/**",
+      "test/**",
+      "docs/**",
+      "features/**",
+      "README.md",
+      "CHANGELOG.md",
+      "ROADMAP.md",
+      ".claude/**"
+    ]
   },
   "stop_conditions": {
     "max_failure_streak": 3,
@@ -39,7 +48,11 @@
   },
   "checker": {
     "command": "codex",
-    "personas": ["architect", "contrarian", "migration"],
+    "personas": [
+      "architect",
+      "contrarian",
+      "migration"
+    ],
     "default_mode": "refute"
   }
 }

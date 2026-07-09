@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: migration
+summary: |
+  round 5 の差分は、前 round の互換性・運用上の主要リスクを概ね潰しており、critical/high 相当の後方互換破壊は見当たりません。残る懸念は、サポート外 Node での失敗メッセージや CLI 判定の堅牢性といった運用品質レベルです。
+findings:
+  - severity: medium
+    title: "Node バージョンガードが npm test / db.js import 経路を覆っていない"
+    detail: |
+      追加された実行時ガードは `src/server.js` の起動パス冒頭に限定されているため、`npm test` が `tests/chat.test.js` から `src/db.js` を import する経路では、古い Node 22.x で `node:sqlite` import 失敗や experimental flag 要求が先に出る可能性がある。engines で unsupported とする方針自体は成立するが、plan が「開発/CI/デプロイの Node を一本化」「分かりやすいメッセージで exit」と明記するなら、test/import 経路も同じ失敗モードに寄せないと運用時の互換性診断が分裂する。
+    suggestion: |
+      共通の `assertSupportedNode()` を `src/runtime.js` 等に置き、`server.js` CLI 起動だけでなく test bootstrap か `db.js` の `node:sqlite` import 前に通す設計を明記する。静的 import では間に合わないため、必要なら `openDb()` 内で version check 後に dynamic import/require 相当で sqlite を読む案にする。
+    file: "plan.md"
+    line: 28
+  - severity: medium
+    title: "CLI 直接実行判定が process.argv[1] 不在・消失パスで import を壊し得る"
+    detail: |
+      新しい判定 `fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))` は symlink 経由起動には強い一方、`process.argv[1]` が未定義、または一時的な launcher/test harness のパスが消えているケースで import 時に throw し得る。テスト import 時に listen しないという契約のための判定が、import 自体の副作用失敗になり得る点は migration 観点では弱い。
+    suggestion: |
+      `process.argv[1] ? fs.realpathSync.native/process.argv[1] を try/catch : false` のように、比較不能なら false として import を継続する設計を明記する。
+    file: "plan.md"
+    line: 29
+  - severity: low
+    title: "T10 は symlink 非対応環境で skip されるため Windows/権限差の回帰検出が弱い"
+    detail: |
+      T10 の `t.skip` 方針は妥当だが、symlink 作成不可環境では重要な境界検証が丸ごと抜ける。Linux CI で必ず走る保証が plan 上にないため、環境差によって regression が見逃される余地がある。
+    suggestion: |
+      CI 対象に symlink 作成可能な Linux/Unix を含める、または `fs.mkdtemp` 配下で directory symlink 作成可否を事前確認し、不可の場合は skip 理由を明示する方針を加える。
+    file: "plan.md"
+    line: 124

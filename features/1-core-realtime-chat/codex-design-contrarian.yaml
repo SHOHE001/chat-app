@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: contrarian
+summary: |
+  round 5 の差分は、前 round の主要な穴（Node 実行時ガード、symlink ディレクトリ逃げ、UTF-8 バイト長判定）を概ね潰している。critical/high に相当する具体的な破壊は見当たらないが、CLI 判定の実装メモには import 安全性の詰めが残る。
+findings:
+  - severity: medium
+    title: "CLI 直接実行判定が import 文脈で例外になり得る"
+    detail: |
+      差分で `fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))` に変更しているが、`process.argv[1]` は `node -e`、REPL、動的 import を使う補助スクリプトなどでは `undefined` になり得る。その場合、factory を import しただけで `realpathSync(undefined)` が例外を投げ、`server.js は factory を export / トップレベルで listen しない` という狙いに反する。標準の `node --test tests/chat.test.js` では顕在化しない可能性が高いため blocking にはしないが、実装時にそのまま書くと再利用性を落とす。
+    suggestion: |
+      `const entry = process.argv[1] ? fs.realpathSync(process.argv[1]) : null; const self = fs.realpathSync(fileURLToPath(import.meta.url)); if (entry === self) ...` のように `process.argv[1]` の存在チェックを明記する。
+    file: "plan.md"
+    line: 30
+  - severity: medium
+    title: "Node バージョンガードの適用範囲が server.js 起動時に偏っている"
+    detail: |
+      今回追加された実行時ガードは `src/server.js` の起動パス冒頭と書かれている。一方で `node --test` は `tests/chat.test.js` から `src/db.js` の `node:sqlite` import に先に到達し得るため、古い Node では分かりやすいガードメッセージではなく import 解決や experimental flag 起因の失敗になる可能性がある。`npm start` の破壊は防げるが、`npm test` の失敗体験までは設計で閉じていない。
+    suggestion: |
+      共通の `assertSupportedNodeVersion()` を `src/runtime.js` 等に置き、`server.js` の CLI パスだけでなく `db.js` import 前に到達するテスト用入口でも呼ぶ、または `tests/chat.test.js` 冒頭で同じガードを明示する。
+    file: "plan.md"
+    line: 28
+  - severity: low
+    title: "symlink テストが Windows/権限差分でスキップ過多になり得る"
+    detail: |
+      T10 は symlink 作成不可なら `t.skip` としているが、静的配信の重要な安全性検証なので、環境によって常にスキップされると退化検出力が弱い。今回の差分で入った対策自体は妥当だが、テストの実効性は環境依存になる。
+    suggestion: |
+      symlink 作成可否を事前判定して skip 理由を明確に出す。CI 環境が決まっているなら、少なくとも CI では T10 が実行される前提を完了条件に加える。
+    file: "plan.md"
+    line: 124

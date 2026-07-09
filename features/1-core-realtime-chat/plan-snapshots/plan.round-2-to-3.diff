@@ -1,0 +1,45 @@
+diff --git a/features/1-core-realtime-chat/plan-snapshots/plan.md.round-2 b/features/1-core-realtime-chat/plan-snapshots/plan.md.round-3
+index 1c523af..9eb2509 100644
+--- a/features/1-core-realtime-chat/plan-snapshots/plan.md.round-2
++++ b/features/1-core-realtime-chat/plan-snapshots/plan.md.round-3
+@@ -24,16 +24,16 @@ labels: type:feature, batch:feature
+ ## 設計方針
+ 
+ - **依存を最小化する**。DB は native module（ビルドが必要な `better-sqlite3` 等）を避け、Node v22.5+ 標準の `node:sqlite`（同期 API、追加ビルド不要）を使う。ランタイム依存は `ws` のみ。gen8/綾瀬への移行で「環境依存を減らす」方針に合致。
+-- **Node バージョン固定（migration 指摘反映）**: `node:sqlite` は v22.5+ で利用可。開発・CI・デプロイは **Node 22 LTS の最新（実測 v22.22.3 で `require('node:sqlite')` がフラグなしで動作、ExperimentalWarning が stderr に出るのみ）** を使う。`package.json` に `"engines": { "node": ">=22.5.0" }` を明記。experimental flag は不要（`--experimental-sqlite` は不要）。`start` は `node src/server.js`、`test` は `node --test`。stderr の ExperimentalWarning はテスト green の判定に影響しない（exit code で判定）。
++- **Node バージョン固定（migration/architect 高指摘反映）**: `node:sqlite` は v22.5 で追加されたが、**22.5〜一部の 22.x では `--experimental-sqlite` フラグが必要**だった（フラグが外れた正確なカットオフ版は推測しない）。フラグ運用を避けるため、`package.json` の `"engines": { "node": ">=22.22.0" }` とし、**下限を「フラグなしで動作を実測した版」（v22.22.3、gen8 の現行 Node）に合わせる**。これで許容範囲すべてでフラグ不要になり `start` / `test` が素の `node` で成立する（`>=22.5.0` だとフラグ必須版を含み `npm start` が壊れ得る、という round 2 指摘への恒久対処）。`start` は `node src/server.js`、`test` は `node --test`。`node:sqlite` は ExperimentalWarning を stderr に出すのみで exit code 0、テスト green 判定に影響しない。
+ - **HTTP と WebSocket を同一ポートで動かす**。`http.createServer` で `public/` を静的配信し、その server を `new WebSocketServer({ server })` に渡して WS を upgrade で相乗りさせる。
+ - **server.js は factory を export（contrarian 高指摘反映）**。トップレベルで listen しない。
+-  - `createChatServer({ dbPath, staticDir })` → `{ server, wss, db, close() }` を返す（listen はまだしない）。テストは `server.listen(0)` でランダムポート・一時 DB を注入できる。
+-  - `src/server.js` を CLI 直接実行したとき（`import.meta.main` 相当の判定）のみ `PORT = process.env.PORT ?? 3000` と既定 DB パス `data/chat.db` で `listen` する。
+-- **静的配信のパストラバーサル防御（architect 高指摘反映）**。`serveStatic(req, res, publicRoot)` を明示設計:
++  - `createChatServer({ dbPath, staticDir })` → `{ server, wss, db, close() }` を返す（listen はまだしない）。**factory 入口で `const root = path.resolve(staticDir)` に正規化**し、以降 `serveStatic` へは正規化済み絶対パスのみ渡す（相対パス混入による境界判定崩れを防ぐ）。テストは `server.listen(0)` でランダムポート・一時 DB を注入できる。
++  - `src/server.js` を CLI 直接実行したとき（`process.argv[1]` がこのファイルかで判定）のみ `PORT = process.env.PORT ?? 3000` と既定 DB パス `data/chat.db` で `listen` する。
++- **静的配信のパストラバーサル防御（architect/contrarian 高指摘反映）**。`serveStatic(req, res, root)`（`root` は正規化済み絶対パス）を明示設計:
+   - `GET` / `HEAD` のみ許可（他は 405）
+   - `new URL(req.url, 'http://localhost').pathname` を取得し `decodeURIComponent`、失敗時は 400
+-  - `path.normalize` → `path.resolve(publicRoot, '.' + pathname)`。解決後パスが `publicRoot + path.sep` で始まらなければ 403（`/../src/server.js` 等を拒否）
+-  - パスがディレクトリ（または `/`）なら `index.html` を返す。存在しなければ 404
++  - `let resolved = path.resolve(root, '.' + pathname)`。**許可条件は `resolved === root || resolved.startsWith(root + path.sep)`**（`/` が `resolved === root` で 403 にならないようにする。round 2 の `/` 403 バグ対処）。外れれば 403（`/../src/server.js` 等を拒否）
++  - 検証通過後、`resolved` がディレクトリ（または `pathname === '/'`）なら `resolved = path.join(resolved, 'index.html')`。存在しなければ 404
+   - 拡張子から最小の MIME マップ（html/css/js/ico）を返す
+ - **DB モジュール `src/db.js`** を分離し、副作用のない関数として export する（テストから DB パスを差し替え可能にする）:
+   - `openDb(path)` → DatabaseSync インスタンスを返し、`PRAGMA user_version` を確認（0 なら初期化して 1 に設定＝将来 migration のフック）、スキーマを `CREATE TABLE IF NOT EXISTS` で作成、デフォルトルーム "全体" を `INSERT OR IGNORE`。**Phase 1 は新規 DB 前提**（既存 DB があっても `IF NOT EXISTS` で無害、`user_version` で将来対応）
+@@ -45,7 +45,7 @@ labels: type:feature, batch:feature
+   - client → server: `{ "type": "join", "nickname": "..." }` / `{ "type": "message", "body": "..." }`
+   - server → client: `{ "type": "history", "messages": [...] }`（join 直後に送信）/ `{ "type": "message", "message": {...} }`（**送信者を含む全接続へブロードキャスト**。フロントは楽観描画せずサーバー echo を唯一の確定表示とする＝重複表示を防ぐ）/ `{ "type": "error", "reason": "..." }`
+   - join 前の message は無視し `{type:"error", reason:"not_joined"}` を返す。nickname 未設定の接続は message を送れない。
+-  - **最小防御（architect/migration low 反映）**: `JSON.parse` 失敗（malformed）は `{type:"error", reason:"bad_json"}`。未知 `type` は `{type:"error", reason:"unknown_type"}`。WS メッセージ payload は 8KB 超で無視 + error（`ws` の `maxPayload` オプションでも二重に上限）。
++  - **最小防御（architect/migration/contrarian 反映）**: `JSON.parse` 失敗（malformed）は `{type:"error", reason:"bad_json"}`。未知 `type` は `{type:"error", reason:"unknown_type"}`。**payload 上限は役割を分離する**: アプリ層で 8KB 超のフレームを判定して `{type:"error", reason:"too_large"}` を返す（接続は維持）。`ws` の `maxPayload` は 64KB に設定し「アプリ層判定より大きな異常フレームだけを ws 層で close（code 1009）」に留める（round 2 指摘: maxPayload に引っかかると error フレームを返す前に close へ流れるため、通常の大きめ入力はアプリ層で拾えるよう ws 上限を上げる）。
+ - **入力バリデーション（contrarian/migration 反映）**:
+   - `nickname`: trim → 空拒否、**最大 32 文字**、改行・制御文字（`/[\x00-\x1f\x7f]/`）を含むものは拒否（`{type:"error", reason:"bad_nickname"}`）
+   - `body`: trim → 空拒否、**最大 2000 文字で切り詰め**（2001 文字以上は先頭 2000 文字を保存・配信）
+@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS messages (
+ | ID | 内容 | 期待値 |
+ |---|---|---|
+ | T01 | 2 つの WS クライアント A/B が join 後、A が `{type:"message", body:"hi"}` を送る | B が `{type:"message"}` フレームを受信し `message.body === "hi"` / `message.author === Aのnickname` |
+-| T02 | 事前に `insertMessage` で 3 件投入 → 新規クライアントが join | join 直後に `{type:"history"}` を受信し `messages.length === 3` かつ created_at 昇順 |
++| T02 | 事前に `insertMessage` で 3 件投入 → 新規クライアントが join | join 直後に `{type:"history"}` を受信し `messages.length === 3` かつ **`id` 昇順（投入順と一致）**。`created_at` は各行に存在することのみ確認（順序契約は id に寄せる） |
+ | T03_boundary | join 済みクライアントが `body:"   "`（空白のみ）を送る | messages に保存されず（`getRecentMessages` の件数が増えない）、ブロードキャストも発生しない |
+ | T04_persistence | `openDb(path)` で 1 件挿入 → `db.close()` → 同 path で再 `openDb` | `getRecentMessages` が挿入した 1 件を返す（再起動後も履歴が残る = SQLite 永続化） |
+ | T05_boundary | join せずにいきなり `{type:"message"}` を送る | messages に保存されず、`{type:"error", reason:"not_joined"}` が返る |

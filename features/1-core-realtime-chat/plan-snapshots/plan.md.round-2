@@ -1,0 +1,126 @@
+# plan: #1 コア: ニックネーム参加＋単一ルームのリアルタイムチャット
+
+slug: core-realtime-chat
+milestone: Phase 1
+labels: type:feature, batch:feature
+
+## In-Scope / Out-of-Scope
+
+| In-Scope | Out-of-Scope |
+|---|---|
+| Node.js + `ws` + SQLite サーバー骨格（HTTP 静的配信 + WebSocket 同一ポート） | Express などの重量フレームワーク導入 |
+| DB スキーマ users / rooms / messages と起動時のデフォルトルーム "全体" 投入 | 複数ルーム作成・削除・切替（Issue #2） |
+| ニックネーム入力 → 入室（認証なし、localStorage 保持） | スレッド機能（Issue #3） |
+| 単一ルームでの WebSocket リアルタイム送受信 | gen8 常駐起動・デプロイ仕上げ（Issue #4） |
+| 入室時の直近メッセージ履歴表示 | 親の監視 / モデレーション / プッシュ通知 / ファイル添付 |
+| acceptance test（WS 送受信・履歴・永続化・境界） | ニックネームのサーバー側一意性強制・本人性検証 |
+
+## Non-Goals
+
+- 認証・ログイン（ニックネームのみ、メールアドレス前提にしない）
+- 複数ルーム / スレッド / 管理者機能（後続 Issue #2〜#4）
+- XSS 以外の高度なモデレーション、レート制限の厳密なチューニング（最低限の防御のみ実装）
+
+## 設計方針
+
+- **依存を最小化する**。DB は native module（ビルドが必要な `better-sqlite3` 等）を避け、Node v22.5+ 標準の `node:sqlite`（同期 API、追加ビルド不要）を使う。ランタイム依存は `ws` のみ。gen8/綾瀬への移行で「環境依存を減らす」方針に合致。
+- **Node バージョン固定（migration 指摘反映）**: `node:sqlite` は v22.5+ で利用可。開発・CI・デプロイは **Node 22 LTS の最新（実測 v22.22.3 で `require('node:sqlite')` がフラグなしで動作、ExperimentalWarning が stderr に出るのみ）** を使う。`package.json` に `"engines": { "node": ">=22.5.0" }` を明記。experimental flag は不要（`--experimental-sqlite` は不要）。`start` は `node src/server.js`、`test` は `node --test`。stderr の ExperimentalWarning はテスト green の判定に影響しない（exit code で判定）。
+- **HTTP と WebSocket を同一ポートで動かす**。`http.createServer` で `public/` を静的配信し、その server を `new WebSocketServer({ server })` に渡して WS を upgrade で相乗りさせる。
+- **server.js は factory を export（contrarian 高指摘反映）**。トップレベルで listen しない。
+  - `createChatServer({ dbPath, staticDir })` → `{ server, wss, db, close() }` を返す（listen はまだしない）。テストは `server.listen(0)` でランダムポート・一時 DB を注入できる。
+  - `src/server.js` を CLI 直接実行したとき（`import.meta.main` 相当の判定）のみ `PORT = process.env.PORT ?? 3000` と既定 DB パス `data/chat.db` で `listen` する。
+- **静的配信のパストラバーサル防御（architect 高指摘反映）**。`serveStatic(req, res, publicRoot)` を明示設計:
+  - `GET` / `HEAD` のみ許可（他は 405）
+  - `new URL(req.url, 'http://localhost').pathname` を取得し `decodeURIComponent`、失敗時は 400
+  - `path.normalize` → `path.resolve(publicRoot, '.' + pathname)`。解決後パスが `publicRoot + path.sep` で始まらなければ 403（`/../src/server.js` 等を拒否）
+  - パスがディレクトリ（または `/`）なら `index.html` を返す。存在しなければ 404
+  - 拡張子から最小の MIME マップ（html/css/js/ico）を返す
+- **DB モジュール `src/db.js`** を分離し、副作用のない関数として export する（テストから DB パスを差し替え可能にする）:
+  - `openDb(path)` → DatabaseSync インスタンスを返し、`PRAGMA user_version` を確認（0 なら初期化して 1 に設定＝将来 migration のフック）、スキーマを `CREATE TABLE IF NOT EXISTS` で作成、デフォルトルーム "全体" を `INSERT OR IGNORE`。**Phase 1 は新規 DB 前提**（既存 DB があっても `IF NOT EXISTS` で無害、`user_version` で将来対応）
+  - `insertMessage(db, roomId, author, body)` → 挿入した行（id, room_id, author, body, created_at）を返す
+  - `getRecentMessages(db, roomId, limit=50)` → **`ORDER BY id ASC` を履歴順の契約とする**（contrarian 指摘: 同一ミリ秒 timestamp でも id 単調増加で順序が決定的）。直近 limit 件は `id DESC LIMIT ?` のサブクエリを `id ASC` に並べ直して返す
+  - `upsertUser(db, nickname)` → `INSERT OR IGNORE` で users に記録
+  - `getDefaultRoomId(db)` → "全体" ルームの id
+- **WS プロトコル（JSON テキストフレーム）**:
+  - client → server: `{ "type": "join", "nickname": "..." }` / `{ "type": "message", "body": "..." }`
+  - server → client: `{ "type": "history", "messages": [...] }`（join 直後に送信）/ `{ "type": "message", "message": {...} }`（**送信者を含む全接続へブロードキャスト**。フロントは楽観描画せずサーバー echo を唯一の確定表示とする＝重複表示を防ぐ）/ `{ "type": "error", "reason": "..." }`
+  - join 前の message は無視し `{type:"error", reason:"not_joined"}` を返す。nickname 未設定の接続は message を送れない。
+  - **最小防御（architect/migration low 反映）**: `JSON.parse` 失敗（malformed）は `{type:"error", reason:"bad_json"}`。未知 `type` は `{type:"error", reason:"unknown_type"}`。WS メッセージ payload は 8KB 超で無視 + error（`ws` の `maxPayload` オプションでも二重に上限）。
+- **入力バリデーション（contrarian/migration 反映）**:
+  - `nickname`: trim → 空拒否、**最大 32 文字**、改行・制御文字（`/[\x00-\x1f\x7f]/`）を含むものは拒否（`{type:"error", reason:"bad_nickname"}`）
+  - `body`: trim → 空拒否、**最大 2000 文字で切り詰め**（2001 文字以上は先頭 2000 文字を保存・配信）
+  - ブロードキャストは JSON 値としてそのまま送り、**表示側（フロント）で `textContent` を使い XSS を防ぐ**（`innerHTML` を使わない）
+- **フロント（`public/`, ビルドなし）**: `index.html`（ニックネーム入力オーバーレイ + チャット画面）/ `app.js`（localStorage の nickname 復元、WebSocket 接続、送受信描画）/ `style.css`（モバイル・低スペック向けに軽量、外部 CDN 依存なし）。WS URL は `location` から組み立て（`ws(s)://host/`）。
+
+## DB スキーマ
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nickname TEXT UNIQUE NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rooms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER NOT NULL REFERENCES rooms(id),
+  author TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+```
+
+## 実装対象
+
+**新規ファイル**:
+
+- `package.json` — 依存 `ws`、`"engines": {"node": ">=22.5.0"}`、scripts（`start` / `test`）
+- `src/db.js` — 上記 DB 関数群
+- `src/server.js` — `createChatServer` factory（静的配信 `serveStatic` + WebSocketServer、接続管理・ブロードキャスト）。CLI 実行時のみ listen
+- `public/index.html` / `public/app.js` / `public/style.css` — フロント
+- `tests/chat.test.js` — acceptance test（`node:test` + `ws` クライアント）
+
+**既存ファイル編集**（architect/contrarian/migration の指摘反映: before/after を明示）:
+
+- `.gitignore` — 現状は gloop 用の ignore のみ。以下を追記する（重複しない形で末尾に追加）:
+
+  ```diff
+  # gloop
+  features/.loop/
+  features/.batch/
+  features/.loop/last-cycle-marker
+  features/.loop/*.pid
+  features/.batch/lock
++
++ # chat-app
++ node_modules/
++ *.db
++ data/
+  ```
+
+**既存関数編集**: なし（本 Issue は全て新規追加。`.gitignore` は追記のみで既存行の変更なし）。
+
+## テスト計画
+
+`node --test`（Node 標準テストランナー）で実行。各テストは一時 DB パス（`tests/tmp-*.db`）とランダムポート（`listen(0)`）でサーバーを起動し、`ws` クライアントで検証、終了時に close & unlink する。
+
+| ID | 内容 | 期待値 |
+|---|---|---|
+| T01 | 2 つの WS クライアント A/B が join 後、A が `{type:"message", body:"hi"}` を送る | B が `{type:"message"}` フレームを受信し `message.body === "hi"` / `message.author === Aのnickname` |
+| T02 | 事前に `insertMessage` で 3 件投入 → 新規クライアントが join | join 直後に `{type:"history"}` を受信し `messages.length === 3` かつ created_at 昇順 |
+| T03_boundary | join 済みクライアントが `body:"   "`（空白のみ）を送る | messages に保存されず（`getRecentMessages` の件数が増えない）、ブロードキャストも発生しない |
+| T04_persistence | `openDb(path)` で 1 件挿入 → `db.close()` → 同 path で再 `openDb` | `getRecentMessages` が挿入した 1 件を返す（再起動後も履歴が残る = SQLite 永続化） |
+| T05_boundary | join せずにいきなり `{type:"message"}` を送る | messages に保存されず、`{type:"error", reason:"not_joined"}` が返る |
+| T06_boundary | join 済みクライアントが 2001 文字以上の body を送る | 保存・配信される `body` がちょうど 2000 文字に切り詰められている |
+| T07_boundary | 制御文字/改行を含む、または 33 文字以上の nickname で join する | `{type:"error", reason:"bad_nickname"}` が返り、以降 message を送れない（users にも保存されない） |
+
+## 完了条件（Issue body より）
+
+- [ ] `npm start` でサーバーが起動し、ブラウザからニックネーム入力で入室できる
+- [ ] 2 つのブラウザ間でメッセージがリアルタイムに届く
+- [ ] サーバー再起動後もメッセージ履歴が SQLite に残っている
+- [ ] acceptance test（WebSocket 経由の送受信・履歴取得）が green

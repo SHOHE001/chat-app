@@ -5,3 +5,8 @@ features/.batch/
 features/.loop/last-cycle-marker
 features/.loop/*.pid
 features/.batch/lock
+
+# chat-app
+node_modules/
+*.db
+data/

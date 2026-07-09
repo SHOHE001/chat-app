@@ -1,0 +1,6 @@
+verdict: pass
+blocking: 0
+persona: aggregate
+summary: |
+  aggregated from 3 personas: {"architect":"pass","contrarian":"pass","migration":"pass"}
+findings:

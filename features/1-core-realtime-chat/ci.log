@@ -1,0 +1,72 @@
+TAP version 13
+# (node:3743383) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: T01 2つのWSクライアント間でメッセージがリアルタイム配信される
+ok 1 - T01 2つのWSクライアント間でメッセージがリアルタイム配信される
+  ---
+  duration_ms: 231.191994
+  type: 'test'
+  ...
+# Subtest: T02 入室時に直近履歴を id 昇順で受信する
+ok 2 - T02 入室時に直近履歴を id 昇順で受信する
+  ---
+  duration_ms: 237.502648
+  type: 'test'
+  ...
+# Subtest: T03_boundary 空白のみ body は保存もブロードキャストもされない
+ok 3 - T03_boundary 空白のみ body は保存もブロードキャストもされない
+  ---
+  duration_ms: 363.480334
+  type: 'test'
+  ...
+# Subtest: T04_persistence DBを閉じて再オープンしても履歴が残る
+ok 4 - T04_persistence DBを閉じて再オープンしても履歴が残る
+  ---
+  duration_ms: 161.192069
+  type: 'test'
+  ...
+# Subtest: T05_boundary join せずに message を送ると error が返り保存されない
+ok 5 - T05_boundary join せずに message を送ると error が返り保存されない
+  ---
+  duration_ms: 141.52386
+  type: 'test'
+  ...
+# Subtest: T06_boundary 2001文字以上のbodyは2000文字に切り詰められる
+ok 6 - T06_boundary 2001文字以上のbodyは2000文字に切り詰められる
+  ---
+  duration_ms: 194.871742
+  type: 'test'
+  ...
+# Subtest: T07_boundary 不正なnicknameでのjoinはbad_nicknameで拒否される
+ok 7 - T07_boundary 不正なnicknameでのjoinはbad_nicknameで拒否される
+  ---
+  duration_ms: 122.711129
+  type: 'test'
+  ...
+# Subtest: T08_boundary 8KB超のフレームはtoo_largeで拒否され接続は維持される
+ok 8 - T08_boundary 8KB超のフレームはtoo_largeで拒否され接続は維持される
+  ---
+  duration_ms: 164.409905
+  type: 'test'
+  ...
+# Subtest: T09_boundary 静的配信のtraversal/不正エンコードが拒否される
+ok 9 - T09_boundary 静的配信のtraversal/不正エンコードが拒否される
+  ---
+  duration_ms: 149.202089
+  type: 'test'
+  ...
+# Subtest: T10_boundary root外を指すsymlink経由のアクセスは403で拒否される
+ok 10 - T10_boundary root外を指すsymlink経由のアクセスは403で拒否される
+  ---
+  duration_ms: 123.026531
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2124.105986

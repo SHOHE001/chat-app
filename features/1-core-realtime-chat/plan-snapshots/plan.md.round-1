@@ -1,0 +1,92 @@
+# plan: #1 コア: ニックネーム参加＋単一ルームのリアルタイムチャット
+
+slug: core-realtime-chat
+milestone: Phase 1
+labels: type:feature, batch:feature
+
+## In-Scope / Out-of-Scope
+
+| In-Scope | Out-of-Scope |
+|---|---|
+| Node.js + `ws` + SQLite サーバー骨格（HTTP 静的配信 + WebSocket 同一ポート） | Express などの重量フレームワーク導入 |
+| DB スキーマ users / rooms / messages と起動時のデフォルトルーム "全体" 投入 | 複数ルーム作成・削除・切替（Issue #2） |
+| ニックネーム入力 → 入室（認証なし、localStorage 保持） | スレッド機能（Issue #3） |
+| 単一ルームでの WebSocket リアルタイム送受信 | gen8 常駐起動・デプロイ仕上げ（Issue #4） |
+| 入室時の直近メッセージ履歴表示 | 親の監視 / モデレーション / プッシュ通知 / ファイル添付 |
+| acceptance test（WS 送受信・履歴・永続化・境界） | ニックネームのサーバー側一意性強制・本人性検証 |
+
+## Non-Goals
+
+- 認証・ログイン（ニックネームのみ、メールアドレス前提にしない）
+- 複数ルーム / スレッド / 管理者機能（後続 Issue #2〜#4）
+- XSS 以外の高度なモデレーション、レート制限の厳密なチューニング（最低限の防御のみ実装）
+
+## 設計方針
+
+- **依存を最小化する**。DB は native module（ビルドが必要な `better-sqlite3` 等）を避け、Node v22.5+ 標準の `node:sqlite`（同期 API、追加ビルド不要）を使う。ランタイム依存は `ws` のみ。gen8/綾瀬への移行で「環境依存を減らす」方針に合致。
+- `package.json` に `"engines": { "node": ">=22.5.0" }` を明記し、`node:sqlite` 前提を固定する。`start` は `node src/server.js`、`test` は `node --test`。
+- **HTTP と WebSocket を同一ポートで動かす**。`http.createServer` で `public/` を静的配信し、その server を `new WebSocketServer({ server })` に渡して WS を upgrade で相乗りさせる。ポートは `process.env.PORT ?? 3000`。
+- **DB モジュール `src/db.js`** を分離し、副作用のない関数として export する（テストから DB パスを差し替え可能にする）:
+  - `openDb(path)` → DatabaseSync インスタンスを返し、スキーマを `CREATE TABLE IF NOT EXISTS` で初期化、デフォルトルーム "全体" を `INSERT OR IGNORE`
+  - `insertMessage(db, roomId, author, body)` → 挿入した行（id, room_id, author, body, created_at）を返す
+  - `getRecentMessages(db, roomId, limit=50)` → created_at 昇順で直近 limit 件
+  - `upsertUser(db, nickname)` → `INSERT OR IGNORE` で users に記録
+  - `getDefaultRoomId(db)` → "全体" ルームの id
+- **WS プロトコル（JSON テキストフレーム）**:
+  - client → server: `{ "type": "join", "nickname": "..." }` / `{ "type": "message", "body": "..." }`
+  - server → client: `{ "type": "history", "messages": [...] }`（join 直後に送信）/ `{ "type": "message", "message": {...} }`（全接続へブロードキャスト）/ `{ "type": "error", "reason": "..." }`
+  - join 前の message は無視し `{type:"error"}` を返す。nickname 未設定の接続は message を送れない。
+- **入力バリデーション**: nickname / body は trim して空なら拒否。body は最大 2000 文字で切り詰め。ブロードキャストは JSON 値としてそのまま送り、**表示側（フロント）で `textContent` を使い XSS を防ぐ**（`innerHTML` を使わない）。
+- **フロント（`public/`, ビルドなし）**: `index.html`（ニックネーム入力オーバーレイ + チャット画面）/ `app.js`（localStorage の nickname 復元、WebSocket 接続、送受信描画）/ `style.css`（モバイル・低スペック向けに軽量、外部 CDN 依存なし）。WS URL は `location` から組み立て（`ws(s)://host/`）。
+
+## DB スキーマ
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nickname TEXT UNIQUE NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rooms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT UNIQUE NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER NOT NULL REFERENCES rooms(id),
+  author TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+```
+
+## 実装対象
+
+新規ファイル（既存編集なし）:
+
+- `package.json` — 依存 `ws`、engines、scripts
+- `src/db.js` — 上記 DB 関数群
+- `src/server.js` — HTTP 静的配信 + WebSocketServer、接続管理・ブロードキャスト
+- `public/index.html` / `public/app.js` / `public/style.css` — フロント
+- `tests/chat.test.js` — acceptance test（`node:test` + `ws` クライアント）
+- `.gitignore` に `*.db` / `node_modules/` を追記（DB ファイルと依存をコミットしない）
+
+## テスト計画
+
+`node --test`（Node 標準テストランナー）で実行。各テストは一時 DB パス（`tests/tmp-*.db`）とランダムポート（`listen(0)`）でサーバーを起動し、`ws` クライアントで検証、終了時に close & unlink する。
+
+| ID | 内容 | 期待値 |
+|---|---|---|
+| T01 | 2 つの WS クライアント A/B が join 後、A が `{type:"message", body:"hi"}` を送る | B が `{type:"message"}` フレームを受信し `message.body === "hi"` / `message.author === Aのnickname` |
+| T02 | 事前に `insertMessage` で 3 件投入 → 新規クライアントが join | join 直後に `{type:"history"}` を受信し `messages.length === 3` かつ created_at 昇順 |
+| T03_boundary | join 済みクライアントが `body:"   "`（空白のみ）を送る | messages に保存されず（`getRecentMessages` の件数が増えない）、ブロードキャストも発生しない |
+| T04_persistence | `openDb(path)` で 1 件挿入 → `db.close()` → 同 path で再 `openDb` | `getRecentMessages` が挿入した 1 件を返す（再起動後も履歴が残る = SQLite 永続化） |
+| T05_boundary | join せずにいきなり `{type:"message"}` を送る | messages に保存されず、`{type:"error"}` が返る |
+
+## 完了条件（Issue body より）
+
+- [ ] `npm start` でサーバーが起動し、ブラウザからニックネーム入力で入室できる
+- [ ] 2 つのブラウザ間でメッセージがリアルタイムに届く
+- [ ] サーバー再起動後もメッセージ履歴が SQLite に残っている
+- [ ] acceptance test（WebSocket 経由の送受信・履歴取得）が green

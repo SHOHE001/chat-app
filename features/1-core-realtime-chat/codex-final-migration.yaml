@@ -1,0 +1,20 @@
+verdict: fail
+blocking: 1
+persona: migration
+summary: |
+  差分はアプリ本体だけでなく gloop のガード設定まで変更しており、既存の自動化・保護境界に対する後方互換性を壊している可能性が高いです。チャット機能自体の acceptance は green ですが、この設定変更は plan の実装対象外で、既存運用への影響がテストされていません。
+findings:
+  - severity: high
+    title: "既存の orchestrator 書き込みガードを無効化している"
+    detail: |
+      `.claude/gloop-config.json` で `guard_paths.deny_orchestrator_write` が `["src/**", "lib/**"]` から空配列に変更されています。これは本 Issue の In-Scope であるチャット実装とは無関係で、既存の gloop/orchestrator が `src/**` や `lib/**` を直接書けないという保護契約を撤廃します。migration 観点では、既存ワークフローの安全境界を破る後方互換性破壊であり、ci.log のチャット acceptance では検出されません。
+    suggestion: |
+      この変更を差分から戻し、本 Issue では `.gitignore` とチャット関連の新規ファイルだけに限定してください。もしガード緩和が必要なら、別 Issue で既存 gloop 運用への影響、移行手順、ロールバック方針を明示して扱うべきです。
+    file: ".claude/gloop-config.json"
+    line: 10
+  - severity: medium
+    title: "Diff が大幅に truncated されており実装全体を検証できない"
+    detail: |
+      提示された diff は 123341B 中 60000B に切り詰められており、`src/db.js`、`src/server.js`、`public/*`、`tests/chat.test.js` の重要な hunks が見えていません。ci.log は green ですが、実際の API 互換性、Node バージョンガード、静的配信境界、DB close/unlink の確実性などを差分ベースで確認できない状態です。
+    suggestion: |
+      最終レビューには truncation なしの diff、または少なくとも新規実装ファイルごとの完全 diff を渡してください。自動判定では `diff_truncated=true` の場合に pass を禁止する運用も検討してください。

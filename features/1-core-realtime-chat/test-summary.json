@@ -1,0 +1,8 @@
+{
+  "framework": "node:test (node --test)",
+  "command": "node --test",
+  "result": { "tests": 10, "pass": 10, "fail": 0, "skipped": 0 },
+  "test_file": "tests/chat.test.js",
+  "test_ids": ["T01","T02","T03_boundary","T04_persistence","T05_boundary","T06_boundary","T07_boundary","T08_boundary","T09_boundary","T10_boundary"],
+  "manual_check_required": false
+}

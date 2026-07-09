@@ -1,0 +1,30 @@
+verdict: pass
+blocking: 0
+persona: architect
+summary: |
+  round 5 の変更点は、前 round の主要な設計矛盾（symlink 経由の静的配信逃げ、ESM 直接実行判定、payload サイズ単位）を概ね解消している。critical/high として実装不能または既存設計破壊に直結する新規問題は見当たらない。
+findings:
+  - severity: medium
+    title: "Node バージョン実行時ガードが ESM static import の前に効かない可能性"
+    detail: |
+      `src/server.js` の起動パス冒頭で `process.versions.node` を検査するとしているが、ESM ではモジュール本文実行前に static import が解決・評価される。`server.js` が top-level で `db.js` を import し、`db.js` が `node:sqlite` を static import する構成だと、未対応 Node では独自ガードの分かりやすいメッセージに到達する前に `node:sqlite` 側の import エラーになる。supported range 外の挙動なので blocking ではないが、計画内の「実行前ガード」と実際の依存評価順が噛み合っていない。
+    suggestion: |
+      Node バージョン検査を `scripts/check-node.js` のような `node:sqlite` 非依存ファイルに分離して `start`/`test` の先頭で実行するか、CLI 起動時だけ dynamic import で `node:sqlite` 依存を遅延させる設計にする。
+    file: "plan.md"
+    line: 29
+  - severity: medium
+    title: "CLI 直接実行判定が import 利用時の argv 形態に依存している"
+    detail: |
+      `fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))` は symlink 起動には強いが、`node -e` や一部の test harness / dynamic import のように `process.argv[1]` が未定義または実在ファイルでない実行形態では、server factory を import しただけで例外になり得る。`server.js は factory を export` し「テストから import した際は listen しない」という設計境界と衝突する余地がある。
+    suggestion: |
+      `process.argv[1]` の存在チェックと `try/catch` を含め、`const isCli = process.argv[1] && realpath(argv1) === realpath(modulePath)` のように import-only 利用で例外を出さない判定にする。
+    file: "plan.md"
+    line: 30
+  - severity: low
+    title: "`.nvmrc` が実装対象リストに明示されていない"
+    detail: |
+      設計方針では `.nvmrc` に `22.22.3` を置くと追記されたが、実装対象の新規ファイル一覧には `.nvmrc` が含まれていない。実装者が読み落とすと、Node バージョン一本化という round 5 の追加設計が成果物に反映されない。
+    suggestion: |
+      新規ファイル一覧に `.nvmrc` を追加し、内容を `22.22.3` と明記する。
+    file: "plan.md"
+    line: 84
