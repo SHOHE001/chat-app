@@ -1,6 +1,6 @@
 # ROADMAP
 
-## Phase 1: foundation 🚧
+## Phase 1: foundation ✅
 
 - Phase Milestone: `Phase 1`
 - Goal: 質問チャット MVP（ニックネーム参加・ルーム・スレッド・gen8 デプロイ）
