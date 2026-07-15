@@ -29,6 +29,7 @@
 - アプリ内権限はアカウントの `owner` / `admin` / `member` に紐づける。旧 `ADMIN_PASSWORD` と `admin_auth` は使わない。
 - 最初の登録者はowner。ownerだけが他アカウントをadmin/memberへ変更でき、owner/adminがチャンネルを管理できる。
 - memberは自分のメッセージだけを編集・削除できる。owner/adminは通常チャンネル・独立スレッドの全投稿を操作できる。UIだけでなくWebSocket側で権限を強制する。
+- adminはmemberを、ownerはadmin/memberをBAN・解除できる。本人とownerはBAN不可。期間は10分、1時間、24時間、7日、30日、永久で、BAN時は全セッション・通知購読を削除して接続中WebSocketも切断する。
 - Basic credential は厳密な Base64 検証後、SHA-256 digest の定数時間比較で照合する。
 - WebSocket は `WebSocketServer({ noServer: true })` と自前の `upgrade` ハンドラで認証する。HTTPだけを認証して
   WebSocketを迂回可能に戻してはいけない。
@@ -90,7 +91,7 @@ sudo tailscale funnel --https=443 off
 
 アカウント、端末間の同時ログイン、ユーザー別権限、明示的ログアウト、全メッセージ対象のWeb Push通知は実装済み。
 通知は送信者と同じアカウントを除外するため、実機通知の確認にはPCとスマホで別アカウントを使う。未読管理、
-メンション限定・チャンネル別通知、パスワード変更・再発行、レート制限、モデレーションは未実装であり、
+メンション限定・チャンネル別通知、パスワード変更・再発行、レート制限、BAN以外のモデレーションは未実装であり、
 Rust版へ持ち込むかドッグフーディングで判断する。
 
 優先して確認する項目:

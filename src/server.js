@@ -26,12 +26,16 @@ import {
   deleteMessage,
   createAccount,
   getAccountByUsername,
+  getAccountById,
   listAccounts,
   setAccountRole,
+  setAccountBan,
+  clearAccountBan,
   setAccountProfile,
   createSession,
   getAccountBySession,
   deleteSession,
+  deleteSessionsForUser,
   deleteExpiredSessions,
   toggleReaction,
   createStandaloneThread,
@@ -49,6 +53,7 @@ import {
   upsertPushSubscription,
   removePushSubscription,
   deletePushSubscriptionByEndpoint,
+  deletePushSubscriptionsForUser,
   listPushSubscriptions,
 } from './db.js';
 
@@ -64,6 +69,14 @@ const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 const ALLOWED_REACTIONS = new Set(['👍', '❤️', '😂', '🎉', '👀']);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PUSH_API_BYTES = 16 * 1024;
+const BAN_DURATIONS = new Map([
+  ['10m', 10 * 60 * 1000],
+  ['1h', 60 * 60 * 1000],
+  ['24h', 24 * 60 * 60 * 1000],
+  ['7d', 7 * 24 * 60 * 60 * 1000],
+  ['30d', 30 * 24 * 60 * 60 * 1000],
+  ['permanent', null],
+]);
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -738,8 +751,8 @@ export function createChatServer({
     }
   }
 
-  function sendError(ws, reason) {
-    sendJson(ws, { type: 'error', reason });
+  function sendError(ws, reason, details = {}) {
+    sendJson(ws, { type: 'error', reason, ...details });
   }
 
   function broadcastMessage(row) {
@@ -854,6 +867,16 @@ export function createChatServer({
     return ws.user?.role === 'owner' || ws.user?.role === 'admin';
   }
 
+  function canModerateUser(actor, target) {
+    if (!actor || !target || actor.id === target.id || target.role === 'owner') return false;
+    if (actor.role === 'owner') return true;
+    return actor.role === 'admin' && target.role === 'member';
+  }
+
+  function isAccountBanned(user, now = Date.now()) {
+    return user?.banned_until === -1 || Number(user?.banned_until) > now;
+  }
+
   function canModifyMessage(ws, message) {
     return Boolean(
       ws.user && (message.author_user_id === ws.user.id || canManageRooms(ws)),
@@ -922,6 +945,10 @@ export function createChatServer({
           sendError(ws, 'bad_credentials');
           return;
         }
+        if (isAccountBanned(user)) {
+          sendError(ws, 'account_banned', { bannedUntil: user.banned_until });
+          return;
+        }
         delete user.password_hash;
         const token = issueSession(user);
         authenticateSocket(ws, user);
@@ -962,6 +989,11 @@ export function createChatServer({
         const nickname = validateNickname(parsed.nickname);
         if (!nickname) {
           sendError(ws, 'bad_nickname');
+          return;
+        }
+        const account = getAccountByUsername(db, nickname);
+        if (isAccountBanned(account)) {
+          sendError(ws, 'account_banned', { bannedUntil: account.banned_until });
           return;
         }
         ws.nickname = nickname;
@@ -1095,6 +1127,51 @@ export function createChatServer({
         if (!setAccountRole(db, userId, parsed.role)) {
           sendError(ws, 'user_not_found');
           return;
+        }
+        broadcastUsers();
+        return;
+      }
+
+      if (parsed.type === 'ban_user' || parsed.type === 'unban_user') {
+        if (!canManageRooms(ws)) {
+          sendError(ws, 'forbidden');
+          return;
+        }
+        const userId = parseRoomId(parsed.userId);
+        const target = userId ? getAccountById(db, userId) : undefined;
+        if (!target) {
+          sendError(ws, 'user_not_found');
+          return;
+        }
+        if (!canModerateUser(ws.user, target)) {
+          sendError(ws, 'forbidden');
+          return;
+        }
+
+        if (parsed.type === 'unban_user') {
+          clearAccountBan(db, target.id);
+          broadcastUsers();
+          return;
+        }
+
+        if (!BAN_DURATIONS.has(parsed.duration)) {
+          sendError(ws, 'bad_ban_duration');
+          return;
+        }
+        const durationMs = BAN_DURATIONS.get(parsed.duration);
+        const bannedUntil = durationMs === null ? -1 : Date.now() + durationMs;
+        setAccountBan(db, target.id, bannedUntil, ws.user.id);
+        deleteSessionsForUser(db, target.id);
+        deletePushSubscriptionsForUser(db, target.id);
+
+        for (const client of wss.clients) {
+          if (client.user?.id !== target.id) continue;
+          sendError(client, 'account_banned', { bannedUntil });
+          client.user = null;
+          client.nickname = null;
+          client.roomId = null;
+          client.sessionTokenHash = null;
+          client.close(4003, 'account banned');
         }
         broadcastUsers();
         return;

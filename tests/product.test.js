@@ -322,3 +322,108 @@ test('P06 message edit/delete: 本人のみ、admin以上は全投稿を操作�
     await stopServer(ctx);
   }
 });
+
+test('P07 ban: 一時BANは接続と全セッションを失効し、解除後に再ログインできる', async () => {
+  const ctx = await startServer();
+  try {
+    const owner = createClient(ctx.url);
+    const member = createClient(ctx.url);
+    await Promise.all([owner.open(), member.open()]);
+    await register(owner, 'ban-owner');
+    const memberAuth = await register(member, 'ban-member');
+
+    const bannedErrorPromise = member.next('error');
+    const memberClosedPromise = new Promise((resolve) => member.ws.once('close', resolve));
+    const usersPromise = owner.next('users');
+    const before = Date.now();
+    owner.send('ban_user', { userId: memberAuth.user.id, duration: '1h' });
+    const bannedError = await bannedErrorPromise;
+    assert.equal(bannedError.reason, 'account_banned');
+    assert.ok(bannedError.bannedUntil >= before + 60 * 60 * 1000);
+    await memberClosedPromise;
+    const users = (await usersPromise).users;
+    assert.equal(users.find((user) => user.id === memberAuth.user.id).banned_until, bannedError.bannedUntil);
+
+    const resumed = createClient(ctx.url);
+    await resumed.open();
+    const resumeError = resumed.next('error');
+    resumed.send('resume_session', { token: memberAuth.sessionToken });
+    assert.equal((await resumeError).reason, 'invalid_session');
+
+    const login = createClient(ctx.url);
+    await login.open();
+    const loginError = login.next('error');
+    login.send('login', { username: 'ban-member', password: 'password-123' });
+    const blocked = await loginError;
+    assert.equal(blocked.reason, 'account_banned');
+    assert.equal(blocked.bannedUntil, bannedError.bannedUntil);
+
+    const unbannedUsers = owner.next('users');
+    owner.send('unban_user', { userId: memberAuth.user.id });
+    assert.equal(
+      (await unbannedUsers).users.find((user) => user.id === memberAuth.user.id).banned_until,
+      null,
+    );
+    const loginOk = login.next('auth_ok');
+    login.send('login', { username: 'ban-member', password: 'password-123' });
+    assert.equal((await loginOk).user.username, 'ban-member');
+
+    owner.close();
+    resumed.close();
+    login.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});
+
+test('P08 ban hierarchy: adminはmemberのみ、ownerはadminも永久BANでき、期限切れは自動解除', async () => {
+  const ctx = await startServer();
+  try {
+    const owner = createClient(ctx.url);
+    const admin = createClient(ctx.url);
+    const member = createClient(ctx.url);
+    await Promise.all([owner.open(), admin.open(), member.open()]);
+    const ownerAuth = await register(owner, 'hierarchy-owner');
+    const adminAuth = await register(admin, 'hierarchy-admin');
+    const memberAuth = await register(member, 'hierarchy-member');
+
+    const roleUpdate = admin.next('users');
+    owner.send('set_role', { userId: adminAuth.user.id, role: 'admin' });
+    await roleUpdate;
+
+    for (const targetId of [ownerAuth.user.id, adminAuth.user.id]) {
+      const forbidden = admin.next('error');
+      admin.send('ban_user', { userId: targetId, duration: '10m' });
+      assert.equal((await forbidden).reason, 'forbidden');
+    }
+    const invalidDuration = admin.next('error');
+    admin.send('ban_user', { userId: memberAuth.user.id, duration: 'forever-ish' });
+    assert.equal((await invalidDuration).reason, 'bad_ban_duration');
+
+    const memberBanned = member.next('error');
+    admin.send('ban_user', { userId: memberAuth.user.id, duration: 'permanent' });
+    assert.deepEqual(await memberBanned, {
+      type: 'error',
+      reason: 'account_banned',
+      bannedUntil: -1,
+    });
+
+    const adminBanned = admin.next('error');
+    owner.send('ban_user', { userId: adminAuth.user.id, duration: '10m' });
+    assert.equal((await adminBanned).reason, 'account_banned');
+
+    ctx.app.db.prepare(
+      'UPDATE users SET banned_until = ?, banned_at = ?, banned_by_user_id = ? WHERE id = ?',
+    ).run(Date.now() - 1, Date.now() - 1000, ownerAuth.user.id, memberAuth.user.id);
+    const expiredLogin = createClient(ctx.url);
+    await expiredLogin.open();
+    const loginOk = expiredLogin.next('auth_ok');
+    expiredLogin.send('login', { username: 'hierarchy-member', password: 'password-123' });
+    assert.equal((await loginOk).user.banned_until, null);
+
+    owner.close();
+    expiredLogin.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});

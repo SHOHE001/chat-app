@@ -131,6 +131,24 @@
     </form>
   </dialog>
 
+  <dialog id="ban-user-dialog" class="ban-user-dialog">
+    <form id="ban-user-form" method="dialog" class="dialog-form">
+      <header><div><h2>アカウントをBAN</h2><p id="ban-user-target"></p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <label>BANする期間
+        <select id="ban-duration-select">
+          <option value="10m">10分</option>
+          <option value="1h" selected>1時間</option>
+          <option value="24h">24時間</option>
+          <option value="7d">7日間</option>
+          <option value="30d">30日間</option>
+          <option value="permanent">永久</option>
+        </select>
+      </label>
+      <p class="ban-note">BANすると、そのアカウントはすべての端末からすぐに切断されます。</p>
+      <footer><button value="cancel" class="secondary-button">キャンセル</button><button value="ban" class="danger-button">BANする</button></footer>
+    </form>
+  </dialog>
+
   <dialog id="profile-dialog" class="profile-dialog">
     <form id="profile-form" method="dialog">
       <header class="profile-header">

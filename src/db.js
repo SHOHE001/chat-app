@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT,
   bio TEXT,
   avatar_attachment_id TEXT REFERENCES attachments(id),
+  banned_until INTEGER,
+  banned_at INTEGER,
+  banned_by_user_id INTEGER REFERENCES users(id),
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS rooms (
@@ -99,11 +102,11 @@ export function openDb(path) {
 
   // user_version: 0=新規、1=旧メッセージ、2=メッセージスレッド、
   // 3=アカウント/リアクション/独立スレッド、4=添付ファイル、5=プロフィール、
-  // 6=メッセージ編集日時、7=Web Push購読とアプリ設定。
+  // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 7');
-    userVersion = 7;
+    db.exec('PRAGMA user_version = 8');
+    userVersion = 8;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -237,6 +240,24 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 7) {
+    const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
+    db.exec('BEGIN');
+    try {
+      if (!userColumns.has('banned_until')) db.exec('ALTER TABLE users ADD COLUMN banned_until INTEGER');
+      if (!userColumns.has('banned_at')) db.exec('ALTER TABLE users ADD COLUMN banned_at INTEGER');
+      if (!userColumns.has('banned_by_user_id')) {
+        db.exec('ALTER TABLE users ADD COLUMN banned_by_user_id INTEGER REFERENCES users(id)');
+      }
+      db.exec('PRAGMA user_version = 8');
+      db.exec('COMMIT');
+      userVersion = 8;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_author_user ON messages(author_user_id)');
@@ -250,6 +271,7 @@ export function openDb(path) {
     'CREATE INDEX IF NOT EXISTS idx_standalone_thread_messages_thread ON standalone_thread_messages(thread_id)',
   );
   db.exec('CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_banned_until ON users(banned_until)');
   db.exec('PRAGMA foreign_keys = ON');
 
   // デフォルトルーム "全体" を投入（既存なら無視）。
@@ -524,6 +546,13 @@ function mapAccount(row, includePasswordHash = false) {
         }
       : null,
     role: row.role,
+    banned_until: row.banned_until === null || row.banned_until === undefined
+      ? null
+      : Number(row.banned_until),
+    banned_at: row.banned_at === null || row.banned_at === undefined ? null : Number(row.banned_at),
+    banned_by_user_id: row.banned_by_user_id === null || row.banned_by_user_id === undefined
+      ? null
+      : Number(row.banned_by_user_id),
     created_at: Number(row.created_at),
   };
   if (includePasswordHash) account.password_hash = row.password_hash;
@@ -565,7 +594,18 @@ export function createAccount(db, username, passwordHash) {
       userId = Number(info.lastInsertRowid);
     }
     db.exec('COMMIT');
-    return { id: userId, username, display_name: null, bio: '', avatar: null, role, created_at: createdAt };
+    return {
+      id: userId,
+      username,
+      display_name: null,
+      bio: '',
+      avatar: null,
+      role,
+      banned_until: null,
+      banned_at: null,
+      banned_by_user_id: null,
+      created_at: createdAt,
+    };
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
@@ -573,10 +613,12 @@ export function createAccount(db, username, passwordHash) {
 }
 
 export function getAccountByUsername(db, username) {
+  clearExpiredAccountBans(db);
   return mapAccount(
     db
       .prepare(
-        `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio, u.created_at,
+        `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio,
+                u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
                 a.id AS avatar_id, a.original_name AS avatar_name,
                 a.mime_type AS avatar_mime_type, a.size AS avatar_size
          FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
@@ -588,9 +630,11 @@ export function getAccountByUsername(db, username) {
 }
 
 export function listAccounts(db) {
+  clearExpiredAccountBans(db);
   return db
     .prepare(
-      `SELECT u.id, u.nickname, u.role, u.display_name, u.bio, u.created_at,
+      `SELECT u.id, u.nickname, u.role, u.display_name, u.bio,
+              u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
               a.id AS avatar_id, a.original_name AS avatar_name,
               a.mime_type AS avatar_mime_type, a.size AS avatar_size
        FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
@@ -605,6 +649,56 @@ export function setAccountRole(db, userId, role) {
     .prepare("UPDATE users SET role = ? WHERE id = ? AND role != 'owner' AND password_hash IS NOT NULL")
     .run(role, userId);
   return Number(info.changes);
+}
+
+export function getAccountById(db, userId) {
+  clearExpiredAccountBans(db);
+  return mapAccount(
+    db
+      .prepare(
+        `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio,
+                u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
+                a.id AS avatar_id, a.original_name AS avatar_name,
+                a.mime_type AS avatar_mime_type, a.size AS avatar_size
+         FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
+         WHERE u.id = ? AND u.password_hash IS NOT NULL`,
+      )
+      .get(userId),
+    true,
+  );
+}
+
+export function clearExpiredAccountBans(db, now = Date.now()) {
+  return Number(
+    db
+      .prepare(
+        `UPDATE users
+         SET banned_until = NULL, banned_at = NULL, banned_by_user_id = NULL
+         WHERE banned_until >= 0 AND banned_until <= ?`,
+      )
+      .run(now).changes,
+  );
+}
+
+export function setAccountBan(db, userId, bannedUntil, bannedByUserId, bannedAt = Date.now()) {
+  const info = db
+    .prepare(
+      `UPDATE users SET banned_until = ?, banned_at = ?, banned_by_user_id = ?
+       WHERE id = ? AND password_hash IS NOT NULL`,
+    )
+    .run(bannedUntil, bannedAt, bannedByUserId, userId);
+  return Number(info.changes);
+}
+
+export function clearAccountBan(db, userId) {
+  return Number(
+    db
+      .prepare(
+        `UPDATE users SET banned_until = NULL, banned_at = NULL, banned_by_user_id = NULL
+         WHERE id = ? AND password_hash IS NOT NULL`,
+      )
+      .run(userId).changes,
+  );
 }
 
 export function setAccountProfile(db, userId, displayName, bio, avatarAttachmentId) {
@@ -625,15 +719,18 @@ export function createSession(db, tokenHash, userId, expiresAt) {
 }
 
 export function getAccountBySession(db, tokenHash, now = Date.now()) {
+  clearExpiredAccountBans(db, now);
   return mapAccount(
     db
       .prepare(
-        `SELECT u.id, u.nickname, u.role, u.display_name, u.bio, u.created_at,
+        `SELECT u.id, u.nickname, u.role, u.display_name, u.bio,
+                u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
                 a.id AS avatar_id, a.original_name AS avatar_name,
                 a.mime_type AS avatar_mime_type, a.size AS avatar_size
          FROM sessions s JOIN users u ON u.id = s.user_id
          LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
-         WHERE s.token_hash = ? AND s.expires_at > ? AND u.password_hash IS NOT NULL`,
+         WHERE s.token_hash = ? AND s.expires_at > ? AND u.password_hash IS NOT NULL
+               AND u.banned_until IS NULL`,
       )
       .get(tokenHash, now),
   );
@@ -641,6 +738,10 @@ export function getAccountBySession(db, tokenHash, now = Date.now()) {
 
 export function deleteSession(db, tokenHash) {
   return Number(db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash).changes);
+}
+
+export function deleteSessionsForUser(db, userId) {
+  return Number(db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId).changes);
 }
 
 export function deleteExpiredSessions(db, now = Date.now()) {
@@ -829,6 +930,10 @@ export function removePushSubscription(db, userId, endpoint) {
 
 export function deletePushSubscriptionByEndpoint(db, endpoint) {
   db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+}
+
+export function deletePushSubscriptionsForUser(db, userId) {
+  return Number(db.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(userId).changes);
 }
 
 export function listPushSubscriptions(db, excludeUserId = null) {

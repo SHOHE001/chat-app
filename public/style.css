@@ -169,7 +169,13 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .member-copy { min-width: 0; flex: 1; }
 .member-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; }
 .role-badge { color: var(--faint); font-size: 10px; text-transform: uppercase; }
+.ban-status { display: block; margin-top: 2px; color: #fa777c; font-size: 10px; }
+.member-moderation { display: grid; flex: 0 0 auto; gap: 4px; justify-items: stretch; }
 .role-select { width: 72px; border: 0; color: var(--muted); background: #1e1f22; font-size: 11px; }
+.member-ban-button { min-height: 22px; padding: 0 7px; border: 1px solid #a1282d; border-radius: 4px; color: #fa777c; background: transparent; font-size: 10px; font-weight: 700; cursor: pointer; }
+.member-ban-button:hover { color: #fff; background: #da373c; }
+.member-ban-button.unban { border-color: #4e5058; color: var(--muted); }
+.member-ban-button.unban:hover { color: var(--text); background: #4e5058; }
 .member { cursor: pointer; }
 .profile-dialog { overflow: hidden; background: #232428; }
 .profile-header { height: 110px; background: linear-gradient(135deg, #5865f2, #3ba7a0); }
@@ -209,6 +215,9 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
 .dialog-form header p { margin: 4px 0 0; color: var(--muted); }
 .dialog-form label, .dialog-form > .form-error { margin-right: 22px; margin-left: 22px; }
 .dialog-form textarea { min-height: 92px; }
+.dialog-form select { width: 100%; height: 42px; padding: 0 12px; border: 0; border-radius: 4px; outline: 0; color: var(--text); background: #1e1f22; }
+.dialog-form select:focus { box-shadow: 0 0 0 2px var(--accent); }
+.ban-note { margin: 16px 22px 0; color: var(--muted); font-size: 13px; }
 .dialog-form footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; padding: 14px 22px; background: #2b2d31; }
 .dialog-form footer .primary-button { width: auto; margin: 0; }
 .danger-button { min-height: 40px; padding: 0 18px; border: 0; border-radius: 4px; color: #fff; background: #da373c; font-weight: 650; cursor: pointer; }

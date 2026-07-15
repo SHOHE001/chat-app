@@ -47,6 +47,7 @@
   const editMessageDialog = $('edit-message-dialog');
   const editMessageInput = $('edit-message-input');
   const deleteMessageDialog = $('delete-message-dialog');
+  const banUserDialog = $('ban-user-dialog');
 
   let ws;
   let reconnectTimer;
@@ -68,6 +69,7 @@
   let profileUploadRequest = null;
   let editingTarget = null;
   let deletingTarget = null;
+  let banningTarget = null;
   let serviceWorkerRegistration = null;
   let notificationSetupPromise = null;
   let swipeStart = null;
@@ -522,7 +524,7 @@
       showAuth();
       return;
     }
-    if (data.type === 'error') handleError(data.reason);
+    if (data.type === 'error') handleError(data.reason, data);
   }
 
   const errorMessages = {
@@ -541,9 +543,24 @@
     bad_avatar: 'その画像はアイコンに設定できません。',
     empty_message: '本文を空にはできません。',
     message_not_found: 'メッセージが見つかりません。',
+    bad_ban_duration: 'BANする期間を選び直してください。',
+    user_not_found: '対象のアカウントが見つかりません。',
   };
 
-  function handleError(reason) {
+  function formatBanMessage(bannedUntil) {
+    if (Number(bannedUntil) === -1) return 'このアカウントは永久BANされています。';
+    if (Number(bannedUntil) > Date.now()) {
+      return `このアカウントは ${formatExact(Number(bannedUntil))} までBANされています。`;
+    }
+    return 'このアカウントはBANされています。';
+  }
+
+  function handleError(reason, details = {}) {
+    if (reason === 'account_banned') {
+      localStorage.removeItem(SESSION_KEY);
+      showAuth(formatBanMessage(details.bannedUntil));
+      return;
+    }
     const message = errorMessages[reason] || `操作できませんでした (${reason})`;
     if (reason === 'invalid_session') {
       localStorage.removeItem(SESSION_KEY);
@@ -646,7 +663,17 @@
       role.className = 'role-badge';
       role.textContent = formatRole(user.role);
       copy.append(name, role);
+      if (isUserBanned(user)) {
+        const status = document.createElement('span');
+        status.className = 'ban-status';
+        status.textContent = user.banned_until === -1
+          ? '永久BAN'
+          : `${new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(user.banned_until))}までBAN`;
+        copy.append(status);
+      }
       item.append(copy);
+      const actions = document.createElement('div');
+      actions.className = 'member-moderation';
       if (me?.role === 'owner' && user.role !== 'owner') {
         const select = document.createElement('select');
         select.className = 'role-select';
@@ -659,11 +686,41 @@
         }
         select.addEventListener('click', (event) => event.stopPropagation());
         select.addEventListener('change', () => send('set_role', { userId: user.id, role: select.value }));
-        item.append(select);
+        actions.append(select);
       }
+      if (canModerateUser(user)) {
+        const banButton = document.createElement('button');
+        banButton.type = 'button';
+        banButton.className = `member-ban-button${isUserBanned(user) ? ' unban' : ''}`;
+        banButton.textContent = isUserBanned(user) ? '解除' : 'BAN';
+        banButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (isUserBanned(user)) {
+            if (confirm(`${accountName(user)} のBANを解除しますか？`)) {
+              send('unban_user', { userId: user.id });
+            }
+            return;
+          }
+          banningTarget = user;
+          $('ban-user-target').textContent = `${accountName(user)}（@${user.username}）`;
+          $('ban-duration-select').value = '1h';
+          banUserDialog.showModal();
+        });
+        actions.append(banButton);
+      }
+      if (actions.childElementCount) item.append(actions);
       item.addEventListener('click', () => openProfile(user, false));
       memberList.append(item);
     }
+  }
+
+  function isUserBanned(user) {
+    return user?.banned_until === -1 || Number(user?.banned_until) > Date.now();
+  }
+
+  function canModerateUser(user) {
+    if (!me || !user || me.id === user.id || user.role === 'owner') return false;
+    return me.role === 'owner' || (me.role === 'admin' && user.role === 'member');
   }
 
   function roleOrder(role) { return { owner: 0, admin: 1, member: 2 }[role] ?? 3; }
@@ -1437,6 +1494,22 @@
     deleteMessageDialog.close();
   });
   deleteMessageDialog.addEventListener('close', () => { deletingTarget = null; });
+  $('ban-user-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (event.submitter?.value === 'cancel') {
+      banningTarget = null;
+      banUserDialog.close();
+      return;
+    }
+    if (!banningTarget) return;
+    send('ban_user', {
+      userId: banningTarget.id,
+      duration: $('ban-duration-select').value,
+    });
+    banningTarget = null;
+    banUserDialog.close();
+  });
+  banUserDialog.addEventListener('close', () => { banningTarget = null; });
 
   composerInputShell.classList.add('highlight-enabled');
   renderComposerHighlight();
