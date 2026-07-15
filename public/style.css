@@ -84,7 +84,7 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .avatar { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #fff; background: hsl(var(--avatar-hue, 220) 55% 45%); font-size: 15px; font-weight: 700; user-select: none; }
 .avatar.small { width: 32px; height: 32px; font-size: 12px; }
 .avatar::after { content: ""; position: absolute; }
-.chat-column { display: flex; min-width: 0; flex-direction: column; background: var(--chat); }
+.chat-column { display: flex; min-width: 0; flex-direction: column; background: var(--chat); touch-action: pan-y pinch-zoom; }
 .topbar { display: flex; align-items: center; gap: 8px; padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); }
 .topbar .hash { color: var(--faint); font-size: 24px; }
 .connection-status { margin-left: auto; color: var(--faint); font-size: 12px; }
@@ -200,7 +200,7 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .thread-message:hover .thread-message-actions, .thread-message:focus-within .thread-message-actions { display: flex; }
 .thread-message-actions .message-action-divider { display: none; }
 .detail-panel .compact { margin: 0 16px max(16px, env(safe-area-inset-bottom)); }
-.scrim { position: fixed; z-index: 20; inset: 0; background: rgba(0,0,0,.55); }
+.scrim { position: fixed; z-index: 20; inset: 0; background: rgba(0,0,0,.55); touch-action: pan-y pinch-zoom; }
 
 dialog { width: min(520px, calc(100% - 28px)); padding: 0; border: 0; border-radius: 8px; color: var(--text); background: var(--chat); box-shadow: 0 18px 55px rgba(0,0,0,.55); }
 dialog::backdrop { background: rgba(0,0,0,.72); }

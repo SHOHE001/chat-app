@@ -16,6 +16,7 @@
   const authModeToggle = $('auth-mode-toggle');
   const authSwitchLabel = $('auth-switch-label');
   const appEl = $('app');
+  const chatColumn = document.querySelector('.chat-column');
   const nav = $('nav');
   const navScrim = $('nav-scrim');
   const roomList = $('room-list');
@@ -69,6 +70,8 @@
   let deletingTarget = null;
   let serviceWorkerRegistration = null;
   let notificationSetupPromise = null;
+  let swipeStart = null;
+  const mobilePanelsMedia = window.matchMedia('(max-width: 980px)');
   const launchParams = new URLSearchParams(location.search);
   let notificationLaunch = {
     roomId: Number(launchParams.get('room')) || null,
@@ -1209,6 +1212,48 @@
   }
   function closeNav() { nav.classList.remove('open'); navScrim.classList.add('hidden'); }
 
+  function shouldIgnorePanelSwipe(target) {
+    return target instanceof Element && Boolean(
+      target.closest('input, textarea, button, select, a, video, audio, dialog, [contenteditable="true"]'),
+    );
+  }
+
+  function handlePanelSwipeStart(event) {
+    if (!mobilePanelsMedia.matches || event.touches.length !== 1 || shouldIgnorePanelSwipe(event.target)) {
+      swipeStart = null;
+      return;
+    }
+    const touch = event.touches[0];
+    swipeStart = { x: touch.clientX, y: touch.clientY, at: Date.now() };
+  }
+
+  function handlePanelSwipeEnd(event) {
+    if (!swipeStart || event.changedTouches.length !== 1) {
+      swipeStart = null;
+      return;
+    }
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - swipeStart.x;
+    const deltaY = touch.clientY - swipeStart.y;
+    const duration = Date.now() - swipeStart.at;
+    swipeStart = null;
+    if (duration > 700 || Math.abs(deltaX) < 64 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.25) {
+      return;
+    }
+    if (nav.classList.contains('open')) {
+      if (deltaX < 0) closeNav();
+      return;
+    }
+    if (membersPanel.classList.contains('open')) {
+      if (deltaX > 0) closeMembers();
+      return;
+    }
+    if (deltaX > 0) openNav();
+    else setMembersOpen(true);
+  }
+
+  function cancelPanelSwipe() { swipeStart = null; }
+
   authModeToggle.addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
   authForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1308,9 +1353,17 @@
   navScrim.addEventListener('click', closeNav);
   membersToggle.addEventListener('click', () => setMembersOpen(!membersPanel.classList.contains('open')));
   membersScrim.addEventListener('click', closeMembers);
-  window.matchMedia('(max-width: 980px)').addEventListener('change', (event) => {
-    if (!event.matches) closeMembers();
+  mobilePanelsMedia.addEventListener('change', (event) => {
+    if (!event.matches) {
+      closeMembers();
+      closeNav();
+    }
   });
+  for (const surface of [chatColumn, navScrim, membersScrim]) {
+    surface.addEventListener('touchstart', handlePanelSwipeStart, { passive: true });
+    surface.addEventListener('touchend', handlePanelSwipeEnd, { passive: true });
+    surface.addEventListener('touchcancel', cancelPanelSwipe, { passive: true });
+  }
   $('thread-close').addEventListener('click', closeThread);
   threadScrim.addEventListener('click', closeThread);
   $('add-thread-button').addEventListener('click', () => { $('thread-create-error').textContent = ''; createThreadDialog.showModal(); });
