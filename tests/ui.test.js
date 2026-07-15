@@ -55,6 +55,15 @@ test('UI06 visual viewport: 端末・回転・キーボードに合わせて表�
   assert.match(css, /html, body \{ background: var\(--chat\); \}/);
 });
 
+test('UI07 members overlay: チャット背景タップと画面幅変更でメンバー一覧を閉じる', () => {
+  assert.match(html, /id="members-toggle"[^>]*aria-controls="members"[^>]*aria-expanded="false"/);
+  assert.match(html, /id="members-scrim" class="scrim hidden"/);
+  assert.match(app, /membersScrim\.addEventListener\('click', closeMembers\)/);
+  assert.match(app, /membersPanel\.classList\.toggle\('open', open\)/);
+  assert.match(app, /membersToggle\.setAttribute\('aria-expanded', String\(open\)\)/);
+  assert.match(app, /matchMedia\('\(max-width: 980px\)'\)\.addEventListener\('change'/);
+});
+
 test('UI02 composer mention: textareaを維持して既存ユーザーのmentionを水色表示する', () => {
   assert.match(html, /id="mention-highlight" class="composer-highlight"/);
   assert.match(html, /id="message-input"/);

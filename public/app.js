@@ -31,6 +31,8 @@
   const notificationButton = $('notification-button');
   const mentionMenu = $('mention-menu');
   const membersPanel = $('members');
+  const membersScrim = $('members-scrim');
+  const membersToggle = $('members-toggle');
   const memberList = $('member-list');
   const threadPanel = $('thread-panel');
   const threadScrim = $('thread-scrim');
@@ -1194,7 +1196,17 @@
     mentionMenu.classList.remove('hidden');
   }
 
-  function openNav() { nav.classList.add('open'); navScrim.classList.remove('hidden'); }
+  function setMembersOpen(open) {
+    membersPanel.classList.toggle('open', open);
+    membersScrim.classList.toggle('hidden', !open);
+    membersToggle.setAttribute('aria-expanded', String(open));
+  }
+  function closeMembers() { setMembersOpen(false); }
+  function openNav() {
+    closeMembers();
+    nav.classList.add('open');
+    navScrim.classList.remove('hidden');
+  }
   function closeNav() { nav.classList.remove('open'); navScrim.classList.add('hidden'); }
 
   authModeToggle.addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
@@ -1294,7 +1306,11 @@
   });
   $('nav-open').addEventListener('click', openNav);
   navScrim.addEventListener('click', closeNav);
-  $('members-toggle').addEventListener('click', () => membersPanel.classList.toggle('open'));
+  membersToggle.addEventListener('click', () => setMembersOpen(!membersPanel.classList.contains('open')));
+  membersScrim.addEventListener('click', closeMembers);
+  window.matchMedia('(max-width: 980px)').addEventListener('change', (event) => {
+    if (!event.matches) closeMembers();
+  });
   $('thread-close').addEventListener('click', closeThread);
   threadScrim.addEventListener('click', closeThread);
   $('add-thread-button').addEventListener('click', () => { $('thread-create-error').textContent = ''; createThreadDialog.showModal(); });

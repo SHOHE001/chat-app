@@ -52,7 +52,7 @@
         <button id="nav-open" class="mobile-button" aria-label="メニューを開く">☰</button>
         <span class="hash">#</span><strong id="room-name">全体</strong>
         <span id="connection-status" class="connection-status">接続中…</span>
-        <button id="members-toggle" class="mobile-button members-button" aria-label="メンバーを表示">♟</button>
+        <button id="members-toggle" class="mobile-button members-button" aria-label="メンバーを表示" aria-controls="members" aria-expanded="false">♟</button>
       </header>
       <div id="message-list" class="message-list" aria-live="polite"></div>
       <div class="composer-wrap">
@@ -78,6 +78,7 @@
       </div>
     </section>
 
+    <div id="members-scrim" class="scrim hidden"></div>
     <aside id="members" class="members-panel">
       <div class="members-heading">メンバー — <span id="member-count">0</span></div>
       <div id="member-list"></div>
