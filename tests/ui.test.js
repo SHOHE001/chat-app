@@ -37,6 +37,15 @@ test('UI04 auth: オーナー決定ルールをログイン画面へ表示しな
   assert.doesNotMatch(html, /class="auth-note"/);
 });
 
+test('UI05 mobile safe area: iPhoneの上端を避け、主要操作を44pxで確保する', () => {
+  assert.match(html, /viewport-fit=cover/);
+  assert.match(css, /height: calc\(48px \+ env\(safe-area-inset-top, 0px\)\)/);
+  assert.match(css, /\.mobile-button \{[^}]*width: 44px;[^}]*height: 44px;/);
+  assert.match(css, /height: 100dvh/);
+  assert.match(css, /env\(safe-area-inset-left, 0px\)/);
+  assert.match(css, /env\(safe-area-inset-right, 0px\)/);
+});
+
 test('UI02 composer mention: textareaを維持して既存ユーザーのmentionを水色表示する', () => {
   assert.match(html, /id="mention-highlight" class="composer-highlight"/);
   assert.match(html, /id="message-input"/);
