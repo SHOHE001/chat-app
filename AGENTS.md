@@ -67,6 +67,17 @@ sudo tailscale funnel --https=443 off
 - Funnel初回はPublic DNSの反映に時間差がある。`tailscale funnel status` と外部DNSを分けて診断する。
 - 依存ゼロ・単一プロセスのプロトタイプ方針を維持し、Rust版の要件が固まる前にNode版を過剰に拡張しない。
 
+## GitとGitHubの必須運用
+
+- コード、設定、テスト、文書などリポジトリへ意味のある変更を加えたターンは、最終回答の前に差分を確認し、必要なテストを実行し、変更だけをコミットして現在のブランチをGitHubへ通常pushする。
+- 読み取り、調査、説明だけでファイルを変更していないターンでは空コミットを作らない。
+- pushが失敗した場合は完了扱いにせず、変更とコミットを保持したまま失敗理由をユーザーへ報告する。
+- `git commit --amend`、rebase、reset、既存タグの移動・削除、ブランチ削除、force pushなど履歴を書き換える操作は、現在の会話でユーザーが明示承認しない限り行わない。
+- 明示承認された履歴操作でも、可能なら`--force-with-lease`を使い、その1回のpushにだけ`GIT_HISTORY_REWRITE_APPROVED=1`を設定する。GitHub側のブランチ保護変更も別途必要なため、明示承認後に一時変更し、操作直後に必ず保護を戻す。恒久的なhook無効化はしない。
+- `.githooks/pre-commit`と`.githooks/pre-push`を回避する`--no-verify`は使わない。clone後は`git config core.hooksPath .githooks`を設定する。
+- CodexのStop hookは、未コミット変更またはupstreamへ未pushのコミットがある状態でターン終了を止める。ユーザーがそのターンだけ未コミット・未pushを明示承認した場合に限り、`scripts/allow-unpushed-turn.sh`で一回限りの例外を作成できる。
+- 実資格情報、`.env`、DB、アップロード本体、セッショントークンはコミットしない。ステージ内容をcommit前に必ず確認する。
+
 ## ドッグフーディング
 
 同一アカウントでPCとスマホへログインして同期・遅延・再接続を確認する。必要に応じて別アカウントも作り、権限とメンションを確認する。例:

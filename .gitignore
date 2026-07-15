@@ -13,6 +13,6 @@ data/
 .env
 
 # Local Codex / gloop runtime state and generated deployment artifacts
-.codex/
+.codex/config.toml
 features/.dashboard.md
 features/deploy-artifacts/

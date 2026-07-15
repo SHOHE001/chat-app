@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(git rev-parse --show-toplevel)/scripts/codex-stop-git-guard.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking commit and GitHub push status"
+          }
+        ]
+      }
+    ]
+  }
+}

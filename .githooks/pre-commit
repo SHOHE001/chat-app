@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+git diff --cached --check
+
+while IFS= read -r -d '' path; do
+  case "$path" in
+    .env|.env.*|data/*|uploads/*|*.db|*.sqlite|*.sqlite3)
+      if [[ "$path" != ".env.example" ]]; then
+        echo "pre-commit: refusing to commit local secret/runtime data: $path" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)

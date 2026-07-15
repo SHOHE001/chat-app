@@ -98,6 +98,23 @@ npm test
 
 `node --test` で `tests/*.test.js` を実行する。
 
+## Git・GitHub保護
+
+このcloneではバージョン管理されたGit hooksを次の設定で有効化している。新しくcloneした端末でも一度実行する。
+
+```bash
+git config core.hooksPath .githooks
+```
+
+- `pre-commit`: 差分の空白エラーを検査し、`.env`、DB、アップロード本体などローカルデータの誤コミットを拒否する。
+- `pre-push`: `npm test`を全件実行し、ref削除とnon-fast-forward pushを拒否する。
+- Codex `Stop` hook: 未コミット変更またはupstreamへ未pushのコミットがあればターン終了を止める。
+- GitHubの`main`ブランチ保護: force pushとブランチ削除を管理者にも禁止する。
+
+Codexのプロジェクトhookは、初回または内容変更後にCodexのhook画面で定義を確認して信頼する必要がある。
+履歴変更は原則禁止とし、必要な場合はユーザーの明示承認後にローカルhookの一回限りの例外とGitHub側の保護変更を
+個別に行い、作業直後に保護を戻す。`--no-verify`による回避は行わない。
+
 ## `.env` の読み込みと優先順位
 
 起動経路（`npm start` と systemd）で `.env` の扱いが異なるので、それぞれ分けて説明する。
