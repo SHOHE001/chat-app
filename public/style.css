@@ -218,6 +218,11 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
 .dialog-form select { width: 100%; height: 42px; padding: 0 12px; border: 0; border-radius: 4px; outline: 0; color: var(--text); background: #1e1f22; }
 .dialog-form select:focus { box-shadow: 0 0 0 2px var(--accent); }
 .ban-note { margin: 16px 22px 0; color: var(--muted); font-size: 13px; }
+.registration-qr-content { padding: 18px 22px 0; text-align: center; }
+.registration-qr-content label { margin-right: 0; margin-left: 0; text-align: left; }
+.registration-qr-image { display: block; width: min(320px, 100%); height: auto; margin: 0 auto; border: 10px solid #fff; border-radius: 8px; background: #fff; }
+.registration-qr-loading { display: grid; min-height: 220px; place-items: center; color: var(--muted); }
+.registration-qr-dialog footer { flex-wrap: wrap; }
 .dialog-form footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; padding: 14px 22px; background: #2b2d31; }
 .dialog-form footer .primary-button { width: auto; margin: 0; }
 .danger-button { min-height: 40px; padding: 0 18px; border: 0; border-radius: 4px; color: #fff; background: #da373c; font-weight: 650; cursor: pointer; }

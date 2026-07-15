@@ -48,6 +48,9 @@
   const editMessageInput = $('edit-message-input');
   const deleteMessageDialog = $('delete-message-dialog');
   const banUserDialog = $('ban-user-dialog');
+  const registrationQrDialog = $('registration-qr-dialog');
+  const registrationQrImage = $('registration-qr-image');
+  const registrationUrlInput = $('registration-url');
 
   let ws;
   let reconnectTimer;
@@ -75,6 +78,7 @@
   let swipeStart = null;
   const mobilePanelsMedia = window.matchMedia('(max-width: 980px)');
   const launchParams = new URLSearchParams(location.search);
+  let registrationLaunch = launchParams.get('register') === '1';
   let notificationLaunch = {
     roomId: Number(launchParams.get('room')) || null,
     threadId: Number(launchParams.get('thread')) || null,
@@ -226,6 +230,68 @@
     return response.status === 204 ? null : response.json();
   }
 
+  async function sessionApi(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        'X-Session-Token': localStorage.getItem(SESSION_KEY) || '',
+        ...options.headers,
+      },
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `api_${response.status}`);
+    }
+    return response.json();
+  }
+
+  async function openRegistrationQr() {
+    registrationQrImage.classList.add('hidden');
+    registrationQrImage.removeAttribute('src');
+    registrationUrlInput.value = '';
+    $('registration-qr-loading').classList.remove('hidden');
+    $('registration-qr-error').textContent = '';
+    $('registration-url-copy').disabled = true;
+    $('registration-qr-save').disabled = true;
+    registrationQrDialog.showModal();
+    try {
+      const origin = encodeURIComponent(location.origin);
+      const result = await sessionApi(`/api/registration-qr?origin=${origin}`);
+      registrationQrImage.src = result.image;
+      registrationQrImage.classList.remove('hidden');
+      registrationUrlInput.value = result.registrationUrl;
+      $('registration-url-copy').disabled = false;
+      $('registration-qr-save').disabled = false;
+    } catch {
+      $('registration-qr-error').textContent = 'QRコードを生成できませんでした。接続を確認してください。';
+    } finally {
+      $('registration-qr-loading').classList.add('hidden');
+    }
+  }
+
+  async function copyRegistrationUrl() {
+    if (!registrationUrlInput.value) return;
+    try {
+      try {
+        await navigator.clipboard.writeText(registrationUrlInput.value);
+      } catch {
+        registrationUrlInput.select();
+        if (!document.execCommand('copy')) throw new Error('copy_failed');
+      }
+      showToast('登録URLをコピーしました。');
+    } catch {
+      showToast('登録URLをコピーできませんでした。');
+    }
+  }
+
+  function saveRegistrationQr() {
+    if (!registrationQrImage.src) return;
+    const link = document.createElement('a');
+    link.href = registrationQrImage.src;
+    link.download = 'chat-lab-registration-qr.png';
+    link.click();
+  }
+
   function urlBase64ToUint8Array(value) {
     const padding = '='.repeat((4 - (value.length % 4)) % 4);
     const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -350,6 +416,7 @@
     const holder = $('my-avatar');
     setAvatar(holder, me.username, me.avatar?.url);
     $('add-room-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
+    $('registration-qr-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
   }
 
   function connect() {
@@ -364,7 +431,10 @@
       authSubmit.textContent = authMode === 'register' ? '登録して入る' : 'ログイン';
       setConnection(false, '認証中…');
       const token = localStorage.getItem(SESSION_KEY);
-      if (token) {
+      if (registrationLaunch) {
+        showAuth();
+        setAuthMode('register');
+      } else if (token) {
         pendingAuth = true;
         send('resume_session', { token });
       } else if (!me) {
@@ -396,6 +466,10 @@
       pendingAuth = false;
       me = data.user;
       if (data.sessionToken) localStorage.setItem(SESSION_KEY, data.sessionToken);
+      if (registrationLaunch) {
+        registrationLaunch = false;
+        history.replaceState(null, '', location.pathname);
+      }
       authForm.reset();
       showApp();
       setConnection(true);
@@ -1375,6 +1449,9 @@
     }
   });
   notificationButton.addEventListener('click', () => { void toggleNotifications(); });
+  $('registration-qr-button').addEventListener('click', () => { void openRegistrationQr(); });
+  $('registration-url-copy').addEventListener('click', () => { void copyRegistrationUrl(); });
+  $('registration-qr-save').addEventListener('click', saveRegistrationQr);
   $('logout-button').addEventListener('click', async () => {
     try { await disableNotifications(true); } catch { /* ログアウト自体は続ける */ }
     send('logout');
@@ -1518,6 +1595,6 @@
   window.addEventListener('orientationchange', syncAppViewportHeight);
   window.visualViewport?.addEventListener('resize', syncAppViewportHeight);
   void ensureNotificationSetup();
-  setAuthMode('login');
+  setAuthMode(registrationLaunch ? 'register' : 'login');
   connect();
 })();

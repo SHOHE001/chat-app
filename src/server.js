@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush from 'web-push';
+import QRCode from 'qrcode';
 import {
   openDb,
   insertMessage,
@@ -409,6 +410,7 @@ export function createChatServer({
   basicAuth,
   vapidSubject = 'mailto:chat-app@localhost',
   pushTransport = webpush,
+  qrEncoder = QRCode,
 }) {
   assertBasicAuthConfig(basicAuth);
   const root = path.resolve(staticDir);
@@ -443,19 +445,24 @@ export function createChatServer({
       sendUnauthorized(res);
       return;
     }
-    let pathname;
+    let requestUrl;
     try {
-      pathname = new URL(req.url, 'http://localhost').pathname;
+      requestUrl = new URL(req.url, 'http://localhost');
     } catch {
       sendStatus(res, 400, 'Bad Request');
       return;
     }
+    const { pathname } = requestUrl;
     if (pathname === '/api/uploads') {
       handleUpload(req, res);
       return;
     }
     if (pathname === '/api/push/public-key' || pathname === '/api/push/subscription') {
       void handlePushApi(req, res, pathname);
+      return;
+    }
+    if (pathname === '/api/registration-qr') {
+      void handleRegistrationQr(req, res, requestUrl);
       return;
     }
     if (pathname.startsWith('/uploads/')) {
@@ -486,6 +493,55 @@ export function createChatServer({
       : (typeof bearer === 'string' && bearer.startsWith('Bearer ') ? bearer.slice(7) : '');
     if (!token) return undefined;
     return getAccountBySession(db, hashSessionToken(token));
+  }
+
+  async function handleRegistrationQr(req, res, requestUrl) {
+    if (req.method !== 'GET') {
+      sendApiError(res, 405, 'method_not_allowed');
+      return;
+    }
+    const user = accountFromRequest(req);
+    if (!user) {
+      sendApiError(res, 401, 'not_authenticated');
+      return;
+    }
+    if (!['owner', 'admin'].includes(user.role)) {
+      sendApiError(res, 403, 'forbidden');
+      return;
+    }
+
+    const originValue = requestUrl.searchParams.get('origin');
+    let origin;
+    try {
+      origin = new URL(originValue);
+    } catch {
+      sendApiError(res, 400, 'bad_origin');
+      return;
+    }
+    if (
+      !['http:', 'https:'].includes(origin.protocol) ||
+      origin.username ||
+      origin.password ||
+      origin.origin !== originValue ||
+      origin.host !== req.headers.host
+    ) {
+      sendApiError(res, 400, 'bad_origin');
+      return;
+    }
+
+    const registrationUrl = new URL('/?register=1', origin).toString();
+    try {
+      const image = await qrEncoder.toDataURL(registrationUrl, {
+        type: 'image/png',
+        errorCorrectionLevel: 'M',
+        margin: 2,
+        width: 512,
+        color: { dark: '#111214', light: '#ffffff' },
+      });
+      sendApiJson(res, 200, { registrationUrl, image });
+    } catch {
+      sendApiError(res, 500, 'qr_generation_failed');
+    }
   }
 
   function readJsonBody(req) {

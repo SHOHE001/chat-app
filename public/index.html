@@ -41,6 +41,7 @@
       <div class="account-bar">
         <div id="my-avatar" class="avatar small"></div>
         <div class="account-copy"><strong id="my-name"></strong><span id="my-role"></span></div>
+        <button id="registration-qr-button" class="icon-button hidden" type="button" title="登録用QRコード" aria-label="登録用QRコードを表示">▦</button>
         <button id="notification-button" class="icon-button notification-button" type="button" title="通知を設定" aria-label="通知を設定" aria-pressed="false">🔔</button>
         <button id="profile-button" class="icon-button" title="プロフィールを編集">✎</button>
         <button id="logout-button" class="icon-button" title="ログアウト">↪</button>
@@ -146,6 +147,19 @@
       </label>
       <p class="ban-note">BANすると、そのアカウントはすべての端末からすぐに切断されます。</p>
       <footer><button value="cancel" class="secondary-button">キャンセル</button><button value="ban" class="danger-button">BANする</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="registration-qr-dialog" class="registration-qr-dialog">
+    <form method="dialog" class="dialog-form">
+      <header><div><h2>登録用QRコード</h2><p>読み取るとChat Labのアカウント登録画面が開きます。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <div class="registration-qr-content">
+        <div id="registration-qr-loading" class="registration-qr-loading">QRコードを生成中…</div>
+        <img id="registration-qr-image" class="registration-qr-image hidden" alt="アカウント登録画面を開くQRコード">
+        <label>登録URL<input id="registration-url" readonly aria-label="登録URL"></label>
+        <p id="registration-qr-error" class="form-error" role="alert"></p>
+      </div>
+      <footer><button value="cancel" class="secondary-button">閉じる</button><button id="registration-url-copy" type="button" class="secondary-button" disabled>URLをコピー</button><button id="registration-qr-save" type="button" class="primary-button" disabled>画像を保存</button></footer>
     </form>
   </dialog>
 
