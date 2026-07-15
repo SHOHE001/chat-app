@@ -32,6 +32,11 @@ test('UI03 Web Push: PWA導線、通知購読、受信クリックを備える',
   assert.equal(JSON.parse(manifest).display, 'standalone');
 });
 
+test('UI04 auth: オーナー決定ルールをログイン画面へ表示しない', () => {
+  assert.doesNotMatch(html, /最初に登録したアカウントがオーナーになります/);
+  assert.doesNotMatch(html, /class="auth-note"/);
+});
+
 test('UI02 composer mention: textareaを維持して既存ユーザーのmentionを水色表示する', () => {
   assert.match(html, /id="mention-highlight" class="composer-highlight"/);
   assert.match(html, /id="message-input"/);

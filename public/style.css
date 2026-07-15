@@ -41,7 +41,6 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .secondary-button { background: #4e5058; }
 .auth-switch { margin: 14px 0 0; font-size: 14px; text-align: left !important; }
 .auth-switch button { padding: 0; border: 0; color: #00a8fc; background: none; cursor: pointer; }
-.auth-note { margin-bottom: 0; font-size: 12px; }
 .form-error { min-height: 18px; margin: 8px 0 -8px; color: #fa777c !important; font-size: 13px; text-align: left !important; }
 
 .app { display: grid; grid-template-columns: 240px minmax(0, 1fr) 240px; height: 100%; }
