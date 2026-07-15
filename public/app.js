@@ -78,6 +78,16 @@
     return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/`;
   }
 
+  let viewportSyncFrame = null;
+  function syncAppViewportHeight() {
+    if (viewportSyncFrame !== null) cancelAnimationFrame(viewportSyncFrame);
+    viewportSyncFrame = requestAnimationFrame(() => {
+      viewportSyncFrame = null;
+      const height = window.visualViewport?.height || window.innerHeight;
+      if (height > 0) document.documentElement.style.setProperty('--app-height', `${Math.round(height)}px`);
+    });
+  }
+
   function send(type, payload = {}) {
     if (ws?.readyState !== WebSocket.OPEN) return false;
     ws.send(JSON.stringify({ type, ...payload }));
@@ -1361,6 +1371,10 @@
 
   composerInputShell.classList.add('highlight-enabled');
   renderComposerHighlight();
+  syncAppViewportHeight();
+  window.addEventListener('resize', syncAppViewportHeight);
+  window.addEventListener('orientationchange', syncAppViewportHeight);
+  window.visualViewport?.addEventListener('resize', syncAppViewportHeight);
   void ensureNotificationSetup();
   setAuthMode('login');
   connect();

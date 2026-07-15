@@ -15,11 +15,13 @@
   --danger: #f23f42;
   --mention: rgba(88, 101, 242, .3);
   --radius: 8px;
+  --app-height: 100dvh;
 }
 
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body { color: var(--text); background: var(--workspace); font: 15px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+html, body { background: var(--chat); }
+body { color: var(--text); font: 15px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
 .hidden { display: none !important; }
@@ -43,7 +45,7 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .auth-switch button { padding: 0; border: 0; color: #00a8fc; background: none; cursor: pointer; }
 .form-error { min-height: 18px; margin: 8px 0 -8px; color: #fa777c !important; font-size: 13px; text-align: left !important; }
 
-.app { display: grid; grid-template-columns: 240px minmax(0, 1fr) 240px; height: 100%; height: 100dvh; }
+.app { display: grid; grid-template-columns: 240px minmax(0, 1fr) 240px; height: 100%; height: var(--app-height); }
 .nav { display: flex; min-width: 0; flex-direction: column; background: var(--sidebar); }
 .workspace-title, .topbar {
   height: calc(48px + env(safe-area-inset-top, 0px));
@@ -225,7 +227,7 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
   .app { display: block; }
   .nav { position: fixed; z-index: 25; top: 0; bottom: 0; left: 0; width: min(300px, 86vw); padding-left: env(safe-area-inset-left, 0px); translate: -100% 0; box-shadow: 8px 0 24px rgba(0,0,0,.35); transition: translate .18s ease; }
   .nav.open { translate: 0; }
-  .chat-column { height: 100%; height: 100dvh; }
+  .chat-column { height: 100%; }
   .mobile-button { display: block; }
   .topbar { padding-right: max(10px, env(safe-area-inset-right, 0px)); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
   .message { grid-template-columns: 48px minmax(0, 1fr); padding-right: 10px; padding-left: 10px; }
