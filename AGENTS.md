@@ -30,7 +30,7 @@
 - 最初の登録者はowner。ownerだけが他アカウントをadmin/memberへ変更でき、owner/adminがチャンネルを管理できる。
 - memberは自分のメッセージだけを編集・削除できる。owner/adminは通常チャンネル・独立スレッドの全投稿を操作できる。UIだけでなくWebSocket側で権限を強制する。
 - adminはmemberを、ownerはadmin/memberをBAN・解除できる。本人とownerはBAN不可。期間は10分、1時間、24時間、7日、30日、永久で、BAN時は全セッション・通知購読を削除して接続中WebSocketも切断する。
-- owner/adminは同一オリジンの`/?register=1`を格納した登録用QRを生成・保存できる。生成APIもmemberを拒否し、外部QRサービスへURLを送らない。これは期限や回数制限のない登録画面への導線であり、招待トークンではない。
+- owner/adminは5分間有効な招待トークン入り登録QRを生成・保存できる。手動更新すると旧QRは即時失効する。初回owner以外の新規登録は有効なQRを必須とし、旧匿名joinは通常運用で無効。生成APIもmemberを拒否し、外部QRサービスへURLを送らない。同じQRの5分以内の複数回利用は許可する。
 - Basic credential は厳密な Base64 検証後、SHA-256 digest の定数時間比較で照合する。
 - WebSocket は `WebSocketServer({ noServer: true })` と自前の `upgrade` ハンドラで認証する。HTTPだけを認証して
   WebSocketを迂回可能に戻してはいけない。

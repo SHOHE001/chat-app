@@ -90,10 +90,19 @@ async function createClient(url) {
   };
 }
 
-async function register(client, username) {
+async function register(client, username, invite = undefined) {
   const response = client.next('auth_ok');
-  client.send('register', { username, password: 'password-123' });
+  client.send('register', { username, password: 'password-123', invite });
   return response;
+}
+
+async function issueInvite(ctx, sessionToken) {
+  const response = await fetch(
+    `${ctx.httpUrl}/api/registration-qr?origin=${encodeURIComponent(ctx.httpUrl)}`,
+    { method: 'POST', headers: { 'X-Session-Token': sessionToken } },
+  );
+  assert.equal(response.status, 200);
+  return new URL((await response.json()).registrationUrl).searchParams.get('invite');
 }
 
 async function pushApi(ctx, pathName, token, init = {}) {
@@ -164,8 +173,12 @@ test('PUSH02 delivery: 送信者を除外して配送し、期限切れ購読を
   try {
     const owner = await createClient(ctx.wsUrl);
     const member = await createClient(ctx.wsUrl);
-    await register(owner, 'push-owner');
-    const memberAuth = await register(member, 'push-recipient');
+    const ownerAuth = await register(owner, 'push-owner');
+    const memberAuth = await register(
+      member,
+      'push-recipient',
+      await issueInvite(ctx, ownerAuth.sessionToken),
+    );
     await pushApi(ctx, '/api/push/subscription', memberAuth.sessionToken, {
       method: 'POST',
       body: JSON.stringify(subscription),

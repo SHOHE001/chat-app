@@ -14,6 +14,7 @@
   const authError = $('auth-error');
   const authSubmit = $('auth-submit');
   const authModeToggle = $('auth-mode-toggle');
+  const authSwitch = $('auth-switch');
   const authSwitchLabel = $('auth-switch-label');
   const appEl = $('app');
   const chatColumn = document.querySelector('.chat-column');
@@ -73,12 +74,17 @@
   let editingTarget = null;
   let deletingTarget = null;
   let banningTarget = null;
+  let registrationQrExpiresAt = 0;
+  let registrationQrTimer = null;
   let serviceWorkerRegistration = null;
   let notificationSetupPromise = null;
   let swipeStart = null;
   const mobilePanelsMedia = window.matchMedia('(max-width: 980px)');
   const launchParams = new URLSearchParams(location.search);
-  let registrationLaunch = launchParams.get('register') === '1';
+  let registrationInvite = launchParams.get('invite') || '';
+  if (!/^[A-Za-z0-9_-]{43}$/.test(registrationInvite)) registrationInvite = '';
+  let registrationLaunch = launchParams.get('register') === '1' && Boolean(registrationInvite);
+  const invalidRegistrationLaunch = launchParams.get('register') === '1' && !registrationInvite;
   let notificationLaunch = {
     roomId: Number(launchParams.get('room')) || null,
     threadId: Number(launchParams.get('thread')) || null,
@@ -245,28 +251,76 @@
     return response.json();
   }
 
-  async function openRegistrationQr() {
+  async function loadRegistrationPolicy() {
+    try {
+      const response = await fetch('/api/registration-policy');
+      if (!response.ok) return;
+      const { inviteRequired } = await response.json();
+      authSwitch.classList.toggle('hidden', Boolean(inviteRequired) && !registrationInvite);
+    } catch {
+      // 取得失敗時は登録導線を閉じたままにする。
+    }
+  }
+
+  function renderRegistrationQrExpiry() {
+    const remaining = Math.max(0, registrationQrExpiresAt - Date.now());
+    const expiry = $('registration-qr-expiry');
+    if (!registrationQrExpiresAt) {
+      expiry.textContent = '';
+      return;
+    }
+    if (remaining <= 0) {
+      expiry.textContent = '期限切れです。QRを更新してください。';
+      expiry.classList.add('expired');
+      $('registration-url-copy').disabled = true;
+      $('registration-qr-save').disabled = true;
+      clearInterval(registrationQrTimer);
+      registrationQrTimer = null;
+      return;
+    }
+    expiry.classList.remove('expired');
+    const seconds = Math.ceil(remaining / 1000);
+    expiry.textContent = `有効期限まで ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+
+  function startRegistrationQrTimer() {
+    clearInterval(registrationQrTimer);
+    renderRegistrationQrExpiry();
+    registrationQrTimer = setInterval(renderRegistrationQrExpiry, 1000);
+  }
+
+  async function generateRegistrationQr() {
     registrationQrImage.classList.add('hidden');
     registrationQrImage.removeAttribute('src');
     registrationUrlInput.value = '';
+    registrationQrExpiresAt = 0;
+    renderRegistrationQrExpiry();
     $('registration-qr-loading').classList.remove('hidden');
     $('registration-qr-error').textContent = '';
+    $('registration-qr-refresh').disabled = true;
     $('registration-url-copy').disabled = true;
     $('registration-qr-save').disabled = true;
-    registrationQrDialog.showModal();
     try {
       const origin = encodeURIComponent(location.origin);
-      const result = await sessionApi(`/api/registration-qr?origin=${origin}`);
+      const result = await sessionApi(`/api/registration-qr?origin=${origin}`, { method: 'POST' });
       registrationQrImage.src = result.image;
       registrationQrImage.classList.remove('hidden');
       registrationUrlInput.value = result.registrationUrl;
+      registrationQrExpiresAt = result.expiresAt;
       $('registration-url-copy').disabled = false;
       $('registration-qr-save').disabled = false;
+      startRegistrationQrTimer();
     } catch {
       $('registration-qr-error').textContent = 'QRコードを生成できませんでした。接続を確認してください。';
     } finally {
       $('registration-qr-loading').classList.add('hidden');
+      $('registration-qr-refresh').disabled = false;
     }
+  }
+
+  async function openRegistrationQr() {
+    registrationQrDialog.showModal();
+    await generateRegistrationQr();
   }
 
   async function copyRegistrationUrl() {
@@ -438,7 +492,7 @@
         pendingAuth = true;
         send('resume_session', { token });
       } else if (!me) {
-        showAuth();
+        showAuth(invalidRegistrationLaunch ? '新規登録には有効な招待QRコードが必要です。' : '');
       }
     });
     ws.addEventListener('message', handleSocketMessage);
@@ -466,6 +520,10 @@
       pendingAuth = false;
       me = data.user;
       if (data.sessionToken) localStorage.setItem(SESSION_KEY, data.sessionToken);
+      if (authMode === 'register') {
+        registrationInvite = '';
+        authSwitch.classList.add('hidden');
+      }
       if (registrationLaunch) {
         registrationLaunch = false;
         history.replaceState(null, '', location.pathname);
@@ -619,6 +677,9 @@
     message_not_found: 'メッセージが見つかりません。',
     bad_ban_duration: 'BANする期間を選び直してください。',
     user_not_found: '対象のアカウントが見つかりません。',
+    invite_required: '新規登録には管理者が表示した招待QRコードが必要です。',
+    invite_invalid: 'この招待QRコードは更新され、無効になりました。新しいQRコードを読み取ってください。',
+    invite_expired: 'この招待QRコードは期限切れです。新しいQRコードを読み取ってください。',
   };
 
   function formatBanMessage(bannedUntil) {
@@ -1389,7 +1450,11 @@
   authForm.addEventListener('submit', (event) => {
     event.preventDefault();
     authError.textContent = '';
-    const sent = send(authMode, { username: usernameInput.value.trim(), password: passwordInput.value });
+    const sent = send(authMode, {
+      username: usernameInput.value.trim(),
+      password: passwordInput.value,
+      ...(authMode === 'register' ? { invite: registrationInvite } : {}),
+    });
     if (!sent) {
       pendingAuth = false;
       authError.textContent = 'まだサーバーへ接続できていません。数秒待ってからもう一度お試しください。';
@@ -1450,8 +1515,13 @@
   });
   notificationButton.addEventListener('click', () => { void toggleNotifications(); });
   $('registration-qr-button').addEventListener('click', () => { void openRegistrationQr(); });
+  $('registration-qr-refresh').addEventListener('click', () => { void generateRegistrationQr(); });
   $('registration-url-copy').addEventListener('click', () => { void copyRegistrationUrl(); });
   $('registration-qr-save').addEventListener('click', saveRegistrationQr);
+  registrationQrDialog.addEventListener('close', () => {
+    clearInterval(registrationQrTimer);
+    registrationQrTimer = null;
+  });
   $('logout-button').addEventListener('click', async () => {
     try { await disableNotifications(true); } catch { /* ログアウト自体は続ける */ }
     send('logout');
@@ -1595,6 +1665,8 @@
   window.addEventListener('orientationchange', syncAppViewportHeight);
   window.visualViewport?.addEventListener('resize', syncAppViewportHeight);
   void ensureNotificationSetup();
+  authSwitch.classList.toggle('hidden', !registrationInvite);
+  void loadRegistrationPolicy();
   setAuthMode(registrationLaunch ? 'register' : 'login');
   connect();
 })();

@@ -24,7 +24,7 @@
         <p id="auth-error" class="form-error" role="alert" aria-live="assertive"></p>
         <button id="auth-submit" class="primary-button" type="submit" disabled>接続中…</button>
       </form>
-      <p class="auth-switch"><span id="auth-switch-label">アカウントが必要ですか？</span> <button id="auth-mode-toggle" type="button">登録</button></p>
+      <p id="auth-switch" class="auth-switch hidden"><span id="auth-switch-label">アカウントが必要ですか？</span> <button id="auth-mode-toggle" type="button">登録</button></p>
     </section>
   </main>
 
@@ -156,10 +156,11 @@
       <div class="registration-qr-content">
         <div id="registration-qr-loading" class="registration-qr-loading">QRコードを生成中…</div>
         <img id="registration-qr-image" class="registration-qr-image hidden" alt="アカウント登録画面を開くQRコード">
+        <p id="registration-qr-expiry" class="registration-qr-expiry"></p>
         <label>登録URL<input id="registration-url" readonly aria-label="登録URL"></label>
         <p id="registration-qr-error" class="form-error" role="alert"></p>
       </div>
-      <footer><button value="cancel" class="secondary-button">閉じる</button><button id="registration-url-copy" type="button" class="secondary-button" disabled>URLをコピー</button><button id="registration-qr-save" type="button" class="primary-button" disabled>画像を保存</button></footer>
+      <footer><button value="cancel" class="secondary-button">閉じる</button><button id="registration-qr-refresh" type="button" class="secondary-button">QRを更新</button><button id="registration-url-copy" type="button" class="secondary-button" disabled>URLをコピー</button><button id="registration-qr-save" type="button" class="primary-button" disabled>画像を保存</button></footer>
     </form>
   </dialog>
 

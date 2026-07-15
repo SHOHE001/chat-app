@@ -47,10 +47,19 @@ async function createClient(url) {
   };
 }
 
-async function register(client, username) {
+async function register(client, username, invite = undefined) {
   const response = client.next('auth_ok');
-  client.send('register', { username, password: 'password-123' });
+  client.send('register', { username, password: 'password-123', invite });
   return response;
+}
+
+async function issueInvite(ctx, sessionToken) {
+  const response = await fetch(
+    `${ctx.httpUrl}/api/registration-qr?origin=${encodeURIComponent(ctx.httpUrl)}`,
+    { method: 'POST', headers: { 'X-Session-Token': sessionToken } },
+  );
+  assert.equal(response.status, 200);
+  return new URL((await response.json()).registrationUrl).searchParams.get('invite');
 }
 
 test('U01 upload: 認証付きアップロード→通常配信・Range配信→添付メッセージが成立する', async () => {
@@ -110,7 +119,7 @@ test('U02 upload boundaries: 他人の添付参照・空ファイル・不明フ
     const owner = await createClient(ctx.wsUrl);
     const member = await createClient(ctx.wsUrl);
     const ownerAuth = await register(owner, 'owner');
-    await register(member, 'member');
+    await register(member, 'member', await issueInvite(ctx, ownerAuth.sessionToken));
 
     const empty = await fetch(`${ctx.httpUrl}/api/uploads`, {
       method: 'POST',
@@ -153,7 +162,7 @@ test('U03 profile: 表示名・自己紹介・本人の画像を設定し、他�
     const owner = await createClient(ctx.wsUrl);
     const member = await createClient(ctx.wsUrl);
     const ownerAuth = await register(owner, 'owner');
-    await register(member, 'member');
+    await register(member, 'member', await issueInvite(ctx, ownerAuth.sessionToken));
     const uploaded = await fetch(`${ctx.httpUrl}/api/uploads`, {
       method: 'POST',
       headers: {

@@ -22,7 +22,7 @@ function tmpDbPath() {
 }
 
 async function startServer(dbPath = tmpDbPath()) {
-  const app = createChatServer({ dbPath, staticDir: 'public' });
+  const app = createChatServer({ dbPath, staticDir: 'public', allowLegacyJoin: true });
   await new Promise((resolve) => app.server.listen(0, resolve));
   const port = app.server.address().port;
   return { app, port, dbPath, url: `ws://127.0.0.1:${port}/`, httpUrl: `http://127.0.0.1:${port}` };

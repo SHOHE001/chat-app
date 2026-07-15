@@ -644,6 +644,10 @@ export function listAccounts(db) {
     .map((row) => mapAccount(row));
 }
 
+export function hasRegisteredAccounts(db) {
+  return Boolean(db.prepare('SELECT 1 FROM users WHERE password_hash IS NOT NULL LIMIT 1').get());
+}
+
 export function setAccountRole(db, userId, role) {
   const info = db
     .prepare("UPDATE users SET role = ? WHERE id = ? AND role != 'owner' AND password_hash IS NOT NULL")

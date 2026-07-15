@@ -18,7 +18,7 @@ function authHeader(user, password, scheme = 'Basic') {
 
 async function startServer({ basicAuth } = {}) {
   const dbPath = tmpDbPath();
-  const app = createChatServer({ dbPath, staticDir: 'public', basicAuth });
+  const app = createChatServer({ dbPath, staticDir: 'public', basicAuth, allowLegacyJoin: true });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   const port = app.server.address().port;
   return {

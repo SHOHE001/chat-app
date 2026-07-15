@@ -28,6 +28,7 @@ import {
   createAccount,
   getAccountByUsername,
   getAccountById,
+  hasRegisteredAccounts,
   listAccounts,
   setAccountRole,
   setAccountBan,
@@ -70,6 +71,9 @@ const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 const ALLOWED_REACTIONS = new Set(['👍', '❤️', '😂', '🎉', '👀']);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PUSH_API_BYTES = 16 * 1024;
+const REGISTRATION_INVITE_LIFETIME_MS = 5 * 60 * 1000;
+const REGISTRATION_INVITE_HASH_KEY = 'registration_invite_hash';
+const REGISTRATION_INVITE_EXPIRY_KEY = 'registration_invite_expires_at';
 const BAN_DURATIONS = new Map([
   ['10m', 10 * 60 * 1000],
   ['1h', 60 * 60 * 1000],
@@ -411,6 +415,7 @@ export function createChatServer({
   vapidSubject = 'mailto:chat-app@localhost',
   pushTransport = webpush,
   qrEncoder = QRCode,
+  allowLegacyJoin = false,
 }) {
   assertBasicAuthConfig(basicAuth);
   const root = path.resolve(staticDir);
@@ -465,6 +470,14 @@ export function createChatServer({
       void handleRegistrationQr(req, res, requestUrl);
       return;
     }
+    if (pathname === '/api/registration-policy') {
+      if (req.method !== 'GET') {
+        sendApiError(res, 405, 'method_not_allowed');
+        return;
+      }
+      sendApiJson(res, 200, { inviteRequired: hasRegisteredAccounts(db) });
+      return;
+    }
     if (pathname.startsWith('/uploads/')) {
       serveUpload(req, res, pathname.slice('/uploads/'.length));
       return;
@@ -496,7 +509,7 @@ export function createChatServer({
   }
 
   async function handleRegistrationQr(req, res, requestUrl) {
-    if (req.method !== 'GET') {
+    if (req.method !== 'POST') {
       sendApiError(res, 405, 'method_not_allowed');
       return;
     }
@@ -529,19 +542,38 @@ export function createChatServer({
       return;
     }
 
-    const registrationUrl = new URL('/?register=1', origin).toString();
+    const invite = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = Date.now() + REGISTRATION_INVITE_LIFETIME_MS;
+    const registrationUrl = new URL('/', origin);
+    registrationUrl.searchParams.set('register', '1');
+    registrationUrl.searchParams.set('invite', invite);
+    registrationUrl.searchParams.set('expires', String(expiresAt));
     try {
-      const image = await qrEncoder.toDataURL(registrationUrl, {
+      const image = await qrEncoder.toDataURL(registrationUrl.toString(), {
         type: 'image/png',
         errorCorrectionLevel: 'M',
         margin: 2,
         width: 512,
         color: { dark: '#111214', light: '#ffffff' },
       });
-      sendApiJson(res, 200, { registrationUrl, image });
+      setAppConfig(db, REGISTRATION_INVITE_HASH_KEY, hashSessionToken(invite));
+      setAppConfig(db, REGISTRATION_INVITE_EXPIRY_KEY, String(expiresAt));
+      sendApiJson(res, 200, { registrationUrl: registrationUrl.toString(), image, expiresAt });
     } catch {
       sendApiError(res, 500, 'qr_generation_failed');
     }
+  }
+
+  function registrationInviteError(invite, now = Date.now()) {
+    if (!hasRegisteredAccounts(db)) return null;
+    if (typeof invite !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(invite)) {
+      return 'invite_required';
+    }
+    const expectedHash = getAppConfig(db, REGISTRATION_INVITE_HASH_KEY);
+    const expiresAt = Number(getAppConfig(db, REGISTRATION_INVITE_EXPIRY_KEY));
+    if (!expectedHash || !Number.isFinite(expiresAt)) return 'invite_invalid';
+    if (expiresAt <= now) return 'invite_expired';
+    return safeStringEqual(hashSessionToken(invite), expectedHash) ? null : 'invite_invalid';
   }
 
   function readJsonBody(req) {
@@ -976,6 +1008,11 @@ export function createChatServer({
           sendError(ws, 'bad_password');
           return;
         }
+        const inviteError = registrationInviteError(parsed.invite);
+        if (inviteError) {
+          sendError(ws, inviteError);
+          return;
+        }
         try {
           const user = createAccount(db, username, hashPassword(parsed.password));
           const token = issueSession(user);
@@ -1042,6 +1079,10 @@ export function createChatServer({
 
       // 旧クライアントと保存済みニックネームの互換用。新UIはアカウント認証のみを使う。
       if (parsed.type === 'join') {
+        if (!allowLegacyJoin) {
+          sendError(ws, 'account_required');
+          return;
+        }
         const nickname = validateNickname(parsed.nickname);
         if (!nickname) {
           sendError(ws, 'bad_nickname');

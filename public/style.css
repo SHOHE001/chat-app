@@ -222,6 +222,8 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
 .registration-qr-content label { margin-right: 0; margin-left: 0; text-align: left; }
 .registration-qr-image { display: block; width: min(320px, 100%); height: auto; margin: 0 auto; border: 10px solid #fff; border-radius: 8px; background: #fff; }
 .registration-qr-loading { display: grid; min-height: 220px; place-items: center; color: var(--muted); }
+.registration-qr-expiry { min-height: 20px; margin: 10px 0 0; color: #57f287; font-weight: 700; }
+.registration-qr-expiry.expired { color: #fa777c; }
 .registration-qr-dialog footer { flex-wrap: wrap; }
 .dialog-form footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; padding: 14px 22px; background: #2b2d31; }
 .dialog-form footer .primary-button { width: auto; margin: 0; }

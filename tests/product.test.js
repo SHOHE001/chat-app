@@ -16,7 +16,13 @@ async function startServer() {
   const dbPath = tmpDbPath();
   const app = createChatServer({ dbPath, staticDir: 'public' });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
-  return { app, dbPath, url: `ws://127.0.0.1:${app.server.address().port}/` };
+  const port = app.server.address().port;
+  return {
+    app,
+    dbPath,
+    url: `ws://127.0.0.1:${port}/`,
+    httpUrl: `http://127.0.0.1:${port}`,
+  };
 }
 
 async function stopServer(ctx) {
@@ -61,10 +67,19 @@ function createClient(url) {
   };
 }
 
-async function register(client, username, password = 'password-123') {
+async function register(client, username, password = 'password-123', invite = undefined) {
   const responsePromise = client.next('auth_ok');
-  client.send('register', { username, password });
+  client.send('register', { username, password, invite });
   return responsePromise;
+}
+
+async function issueInvite(ctx, sessionToken) {
+  const response = await fetch(
+    `${ctx.httpUrl}/api/registration-qr?origin=${encodeURIComponent(ctx.httpUrl)}`,
+    { method: 'POST', headers: { 'X-Session-Token': sessionToken } },
+  );
+  assert.equal(response.status, 200);
+  return new URL((await response.json()).registrationUrl).searchParams.get('invite');
 }
 
 test('P01 account: 最初の登録者はowner、以降はmember、session resumeとloginが使える', async () => {
@@ -79,7 +94,7 @@ test('P01 account: 最初の登録者はowner、以降はmember、session resume
 
     const member = createClient(ctx.url);
     await member.open();
-    const memberAuth = await register(member, 'member');
+    const memberAuth = await register(member, 'member', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken));
     assert.equal(memberAuth.user.role, 'member');
 
     const forbiddenPromise = member.next('error');
@@ -116,8 +131,8 @@ test('P02 roles: ownerがmemberをadminへ変更するとルーム管理権限�
     const owner = createClient(ctx.url);
     const member = createClient(ctx.url);
     await Promise.all([owner.open(), member.open()]);
-    await register(owner, 'owner');
-    const memberAuth = await register(member, 'member');
+    const ownerAuth = await register(owner, 'owner');
+    const memberAuth = await register(member, 'member', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken));
 
     const roleUpdatePromise = member.next('users');
     owner.send('set_role', { userId: memberAuth.user.id, role: 'admin' });
@@ -142,8 +157,8 @@ test('P03 reactions: アカウント単位で絵文字を追加・取消でき�
     const owner = createClient(ctx.url);
     const member = createClient(ctx.url);
     await Promise.all([owner.open(), member.open()]);
-    await register(owner, 'owner');
-    const memberAuth = await register(member, 'member');
+    const ownerAuth = await register(owner, 'owner');
+    const memberAuth = await register(member, 'member', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken));
 
     const messagePromise = member.next('message');
     owner.send('message', { body: 'reaction target' });
@@ -177,8 +192,8 @@ test('P04 standalone threads: 専用作成→一覧→open→返信が独立し�
     const owner = createClient(ctx.url);
     const member = createClient(ctx.url);
     await Promise.all([owner.open(), member.open()]);
-    await register(owner, 'owner');
-    await register(member, 'member');
+    const ownerAuth = await register(owner, 'owner');
+    await register(member, 'member', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken));
 
     const createdPromise = owner.next('thread_created');
     const listPromise = member.next('threads');
@@ -212,10 +227,11 @@ test('P05 account boundaries: 重複登録・短いpassword・未認証のaccoun
     const first = createClient(ctx.url);
     const second = createClient(ctx.url);
     await Promise.all([first.open(), second.open()]);
-    await register(first, 'same-name');
+    const firstAuth = await register(first, 'same-name');
+    const invite = await issueInvite(ctx, firstAuth.sessionToken);
 
     const duplicatePromise = second.next('error');
-    second.send('register', { username: 'same-name', password: 'password-456' });
+    second.send('register', { username: 'same-name', password: 'password-456', invite });
     assert.equal((await duplicatePromise).reason, 'account_exists');
 
     const shortPromise = second.next('error');
@@ -239,8 +255,8 @@ test('P06 message edit/delete: 本人のみ、admin以上は全投稿を操作�
     const owner = createClient(ctx.url);
     const member = createClient(ctx.url);
     await Promise.all([owner.open(), member.open()]);
-    await register(owner, 'owner');
-    const memberAuth = await register(member, 'member');
+    const ownerAuth = await register(owner, 'owner');
+    const memberAuth = await register(member, 'member', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken));
 
     const ownerMessagePromise = member.next('message');
     const ownerEchoPromise = owner.next('message');
@@ -329,8 +345,8 @@ test('P07 ban: 一時BANは接続と全セッションを失効し、解除後�
     const owner = createClient(ctx.url);
     const member = createClient(ctx.url);
     await Promise.all([owner.open(), member.open()]);
-    await register(owner, 'ban-owner');
-    const memberAuth = await register(member, 'ban-member');
+    const ownerAuth = await register(owner, 'ban-owner');
+    const memberAuth = await register(member, 'ban-member', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken));
 
     const bannedErrorPromise = member.next('error');
     const memberClosedPromise = new Promise((resolve) => member.ws.once('close', resolve));
@@ -384,8 +400,9 @@ test('P08 ban hierarchy: adminはmemberのみ、ownerはadminも永久BANでき�
     const member = createClient(ctx.url);
     await Promise.all([owner.open(), admin.open(), member.open()]);
     const ownerAuth = await register(owner, 'hierarchy-owner');
-    const adminAuth = await register(admin, 'hierarchy-admin');
-    const memberAuth = await register(member, 'hierarchy-member');
+    const invite = await issueInvite(ctx, ownerAuth.sessionToken);
+    const adminAuth = await register(admin, 'hierarchy-admin', 'password-123', invite);
+    const memberAuth = await register(member, 'hierarchy-member', 'password-123', invite);
 
     const roleUpdate = admin.next('users');
     owner.send('set_role', { userId: adminAuth.user.id, role: 'admin' });
