@@ -87,8 +87,10 @@ async function joinClient(ctx, nickname) {
   return { ...client, history, rooms };
 }
 
-async function authAdmin(client, password) {
-  client.ws.send(JSON.stringify({ type: 'admin_auth', password }));
+async function authAdmin(client) {
+  client.ws.send(
+    JSON.stringify({ type: 'register', username: `owner-${counter++}`, password: 'password-123' }),
+  );
   return client.next();
 }
 
@@ -96,17 +98,19 @@ function timeout(ms, tag = 'timeout') {
   return new Promise((resolve) => setTimeout(() => resolve(tag), ms));
 }
 
-test('T11_admin_auth 正しい合言葉でadmin_auth_ok、誤った合言葉でbad_admin_password', async () => {
+test('T11_account_owner 最初の登録者がownerになり、旧admin_authは無効', async () => {
   const ctx = await startServer({ adminPassword: 'himitsu' });
   try {
     const client = await connectClient(ctx);
+    const oldAuthPromise = client.next();
+    client.ws.send(JSON.stringify({ type: 'admin_auth', password: 'himitsu' }));
+    const oldAuth = await oldAuthPromise;
+    assert.equal(oldAuth.type, 'error');
+    assert.equal(oldAuth.reason, 'admin_disabled');
 
-    const badRes = await authAdmin(client, 'wrong');
-    assert.equal(badRes.type, 'error');
-    assert.equal(badRes.reason, 'bad_admin_password');
-
-    const okRes = await authAdmin(client, 'himitsu');
-    assert.equal(okRes.type, 'admin_auth_ok');
+    const auth = await authAdmin(client);
+    assert.equal(auth.type, 'auth_ok');
+    assert.equal(auth.user.role, 'owner');
 
     client.ws.close();
   } finally {
@@ -114,11 +118,12 @@ test('T11_admin_auth 正しい合言葉でadmin_auth_ok、誤った合言葉でb
   }
 });
 
-test('T12_boundary_admin_disabled adminPassword未設定サーバーでは正しい値でもadmin_disabled', async () => {
+test('T12_boundary_admin_disabled adminPasswordの有無にかかわらずadmin_authは無効', async () => {
   const ctx = await startServer();
   try {
     const client = await connectClient(ctx);
-    const res = await authAdmin(client, 'anything');
+    client.ws.send(JSON.stringify({ type: 'admin_auth', password: 'anything' }));
+    const res = await client.next();
     assert.equal(res.type, 'error');
     assert.equal(res.reason, 'admin_disabled');
     client.ws.close();
@@ -167,8 +172,9 @@ test('T14_create_room 管理者のcreate_roomで全クライアントにroomsが
       assert.deepEqual(Object.keys(room).sort(), ['id', 'name']);
     }
 
-    const authRes = await authAdmin(adminClient, 'himitsu');
-    assert.equal(authRes.type, 'admin_auth_ok');
+    const authRes = await authAdmin(adminClient);
+    assert.equal(authRes.type, 'auth_ok');
+    assert.equal(authRes.user.role, 'owner');
 
     const otherClient = await joinClient(ctx, 'いっぱん');
 

@@ -10,6 +10,11 @@ const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   nickname TEXT UNIQUE NOT NULL,
+  password_hash TEXT,
+  role TEXT NOT NULL DEFAULT 'member',
+  display_name TEXT,
+  bio TEXT,
+  avatar_attachment_id TEXT REFERENCES attachments(id),
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS rooms (
@@ -17,13 +22,55 @@ CREATE TABLE IF NOT EXISTS rooms (
   name TEXT UNIQUE NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  uploader_user_id INTEGER NOT NULL REFERENCES users(id),
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   room_id INTEGER NOT NULL REFERENCES rooms(id),
   author TEXT NOT NULL,
+  author_user_id INTEGER REFERENCES users(id),
   body TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  thread_root_id INTEGER REFERENCES messages(id)
+  edited_at INTEGER,
+  thread_root_id INTEGER REFERENCES messages(id),
+  attachment_id TEXT REFERENCES attachments(id)
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_id, emoji, user_id)
+);
+CREATE TABLE IF NOT EXISTS standalone_threads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  author_user_id INTEGER NOT NULL REFERENCES users(id),
+  author TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS standalone_thread_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id INTEGER NOT NULL REFERENCES standalone_threads(id) ON DELETE CASCADE,
+  author_user_id INTEGER NOT NULL REFERENCES users(id),
+  author TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  edited_at INTEGER
 );
 `;
 
@@ -38,10 +85,13 @@ export function openDb(path) {
   // スキーマは IF NOT EXISTS で常に無害に作成する（Phase 1 は新規 DB 前提）。
   db.exec(SCHEMA_SQL);
 
-  // user_version: 0=新規（SCHEMA_SQL がフルスキーマを作成済み）、1=スレッド列なしの旧DB、2=現行。
-  const { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
+  // user_version: 0=新規、1=旧メッセージ、2=メッセージスレッド、
+  // 3=アカウント/リアクション/独立スレッド、4=添付ファイル、5=プロフィール、
+  // 6=メッセージ編集日時。
+  let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 2');
+    db.exec('PRAGMA user_version = 6');
+    userVersion = 6;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -57,6 +107,92 @@ export function openDb(path) {
       }
       db.exec('PRAGMA user_version = 2');
       db.exec('COMMIT');
+      userVersion = 2;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  if (userVersion === 2) {
+    const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
+    const messageColumns = new Set(
+      db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name),
+    );
+    db.exec('BEGIN');
+    try {
+      if (!userColumns.has('password_hash')) {
+        db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+      }
+      if (!userColumns.has('role')) {
+        db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'");
+      }
+      if (!messageColumns.has('author_user_id')) {
+        db.exec('ALTER TABLE messages ADD COLUMN author_user_id INTEGER REFERENCES users(id)');
+      }
+      db.exec('PRAGMA user_version = 3');
+      db.exec('COMMIT');
+      userVersion = 3;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  if (userVersion === 3) {
+    const messageColumns = new Set(
+      db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name),
+    );
+    db.exec('BEGIN');
+    try {
+      if (!messageColumns.has('attachment_id')) {
+        db.exec('ALTER TABLE messages ADD COLUMN attachment_id TEXT REFERENCES attachments(id)');
+      }
+      db.exec('PRAGMA user_version = 4');
+      db.exec('COMMIT');
+      userVersion = 4;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  if (userVersion === 4) {
+    const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
+    db.exec('BEGIN');
+    try {
+      if (!userColumns.has('display_name')) db.exec('ALTER TABLE users ADD COLUMN display_name TEXT');
+      if (!userColumns.has('bio')) db.exec('ALTER TABLE users ADD COLUMN bio TEXT');
+      if (!userColumns.has('avatar_attachment_id')) {
+        db.exec('ALTER TABLE users ADD COLUMN avatar_attachment_id TEXT REFERENCES attachments(id)');
+      }
+      db.exec('PRAGMA user_version = 5');
+      db.exec('COMMIT');
+      userVersion = 5;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  if (userVersion === 5) {
+    const messageColumns = new Set(
+      db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name),
+    );
+    const threadMessageColumns = new Set(
+      db.prepare('PRAGMA table_info(standalone_thread_messages)').all().map((column) => column.name),
+    );
+    db.exec('BEGIN');
+    try {
+      if (!messageColumns.has('edited_at')) {
+        db.exec('ALTER TABLE messages ADD COLUMN edited_at INTEGER');
+      }
+      if (!threadMessageColumns.has('edited_at')) {
+        db.exec('ALTER TABLE standalone_thread_messages ADD COLUMN edited_at INTEGER');
+      }
+      db.exec('PRAGMA user_version = 6');
+      db.exec('COMMIT');
+      userVersion = 6;
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
@@ -65,6 +201,17 @@ export function openDb(path) {
 
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_author_user ON messages(author_user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions(message_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_attachment ON messages(attachment_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_attachments_uploader ON attachments(uploader_user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_standalone_threads_room ON standalone_threads(room_id)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_standalone_thread_messages_thread ON standalone_thread_messages(thread_id)',
+  );
+  db.exec('PRAGMA foreign_keys = ON');
 
   // デフォルトルーム "全体" を投入（既存なら無視）。
   db.prepare('INSERT OR IGNORE INTO rooms (name, created_at) VALUES (?, ?)').run(
@@ -82,20 +229,107 @@ export function openDb(path) {
  * @param {string} author
  * @param {string} body
  */
-export function insertMessage(db, roomId, author, body, threadRootId = null) {
+export function insertMessage(
+  db,
+  roomId,
+  author,
+  body,
+  threadRootId = null,
+  authorUserId = null,
+  attachmentId = null,
+) {
   const createdAt = Date.now();
   const stmt = db.prepare(
-    'INSERT INTO messages (room_id, author, body, created_at, thread_root_id) VALUES (?, ?, ?, ?, ?)',
+    `INSERT INTO messages
+       (room_id, author, author_user_id, body, created_at, thread_root_id, attachment_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
-  const info = stmt.run(roomId, author, body, createdAt, threadRootId);
+  const info = stmt.run(roomId, author, authorUserId, body, createdAt, threadRootId, attachmentId);
   return {
     id: Number(info.lastInsertRowid),
     room_id: roomId,
     author,
+    author_user_id: authorUserId,
     body,
     created_at: createdAt,
+    edited_at: null,
     thread_root_id: threadRootId,
+    attachment: attachmentId ? getAttachmentById(db, attachmentId) : null,
+    reactions: [],
   };
+}
+
+function mapAttachment(row) {
+  if (!row) return undefined;
+  return {
+    id: row.id,
+    name: row.original_name,
+    mime_type: row.mime_type,
+    size: Number(row.size),
+    url: `/uploads/${row.id}`,
+    created_at: Number(row.created_at),
+  };
+}
+
+export function createAttachment(db, { id, uploaderUserId, originalName, storedName, mimeType, size }) {
+  const createdAt = Date.now();
+  db.prepare(
+    `INSERT INTO attachments
+       (id, uploader_user_id, original_name, stored_name, mime_type, size, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, uploaderUserId, originalName, storedName, mimeType, size, createdAt);
+  return { id, name: originalName, mime_type: mimeType, size, url: `/uploads/${id}`, created_at: createdAt };
+}
+
+export function getAttachmentById(db, id, includeStoredName = false) {
+  const row = db
+    .prepare(
+      `SELECT id, uploader_user_id, original_name, stored_name, mime_type, size, created_at
+       FROM attachments WHERE id = ?`,
+    )
+    .get(id);
+  const attachment = mapAttachment(row);
+  if (attachment && includeStoredName) attachment.stored_name = row.stored_name;
+  if (attachment) attachment.uploader_user_id = Number(row.uploader_user_id);
+  return attachment;
+}
+
+function attachmentsById(db, rows) {
+  const ids = [...new Set(rows.map((row) => row.attachment_id).filter(Boolean))];
+  const result = new Map();
+  if (!ids.length) return result;
+  const placeholders = ids.map(() => '?').join(', ');
+  for (const row of db.prepare(`SELECT * FROM attachments WHERE id IN (${placeholders})`).all(...ids)) {
+    result.set(row.id, mapAttachment(row));
+  }
+  return result;
+}
+
+function reactionsByMessage(db, messageIds) {
+  const result = new Map();
+  if (messageIds.length === 0) return result;
+  const placeholders = messageIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT message_id, emoji, user_id
+       FROM reactions
+       WHERE message_id IN (${placeholders})
+       ORDER BY message_id ASC, emoji ASC, user_id ASC`,
+    )
+    .all(...messageIds);
+  for (const row of rows) {
+    const messageId = Number(row.message_id);
+    if (!result.has(messageId)) result.set(messageId, []);
+    const groups = result.get(messageId);
+    let group = groups.find((item) => item.emoji === row.emoji);
+    if (!group) {
+      group = { emoji: row.emoji, count: 0, userIds: [] };
+      groups.push(group);
+    }
+    group.count += 1;
+    group.userIds.push(Number(row.user_id));
+  }
+  return result;
 }
 
 /**
@@ -108,7 +342,8 @@ export function getRecentMessages(db, roomId, limit = 50) {
   const rows = db
     .prepare(
       `SELECT * FROM (
-         SELECT m.id, m.room_id, m.author, m.body, m.created_at,
+         SELECT m.id, m.room_id, m.author, m.author_user_id, m.body, m.created_at, m.edited_at,
+                m.attachment_id,
                 COUNT(r.id) AS thread_reply_count,
                 MAX(r.created_at) AS thread_last_reply_at
          FROM messages m
@@ -121,15 +356,21 @@ export function getRecentMessages(db, roomId, limit = 50) {
        ORDER BY id ASC`,
     )
     .all(roomId, limit);
+  const reactionMap = reactionsByMessage(db, rows.map((row) => Number(row.id)));
+  const attachmentMap = attachmentsById(db, rows);
   return rows.map((row) => ({
     id: Number(row.id),
     room_id: Number(row.room_id),
     author: row.author,
+    author_user_id: row.author_user_id === null ? null : Number(row.author_user_id),
     body: row.body,
     created_at: Number(row.created_at),
+    edited_at: row.edited_at === null ? null : Number(row.edited_at),
     thread_root_id: null, // タイムライン行は定義上 root のみ。broadcast row と形状を揃える
     thread_reply_count: Number(row.thread_reply_count),
     thread_last_reply_at: row.thread_last_reply_at === null ? null : Number(row.thread_last_reply_at),
+    attachment: row.attachment_id ? attachmentMap.get(row.attachment_id) || null : null,
+    reactions: reactionMap.get(Number(row.id)) || [],
   }));
 }
 
@@ -145,7 +386,7 @@ export function getThreadMessages(db, rootId, roomId, limit = 50) {
   const rows = db
     .prepare(
       `SELECT * FROM (
-         SELECT id, room_id, author, body, created_at, thread_root_id
+         SELECT id, room_id, author, author_user_id, body, created_at, edited_at, thread_root_id
          FROM messages
          WHERE thread_root_id = ? AND room_id = ?
          ORDER BY id DESC
@@ -158,8 +399,10 @@ export function getThreadMessages(db, rootId, roomId, limit = 50) {
     id: Number(row.id),
     room_id: Number(row.room_id),
     author: row.author,
+    author_user_id: row.author_user_id === null ? null : Number(row.author_user_id),
     body: row.body,
     created_at: Number(row.created_at),
+    edited_at: row.edited_at === null ? null : Number(row.edited_at),
     thread_root_id: Number(row.thread_root_id),
   }));
 }
@@ -172,17 +415,45 @@ export function getThreadMessages(db, rootId, roomId, limit = 50) {
  */
 export function getMessageById(db, messageId) {
   const row = db
-    .prepare('SELECT id, room_id, author, body, created_at, thread_root_id FROM messages WHERE id = ?')
+    .prepare(
+      `SELECT id, room_id, author, author_user_id, body, created_at, edited_at,
+              thread_root_id, attachment_id
+       FROM messages WHERE id = ?`,
+    )
     .get(messageId);
   if (!row) return undefined;
   return {
     id: Number(row.id),
     room_id: Number(row.room_id),
     author: row.author,
+    author_user_id: row.author_user_id === null ? null : Number(row.author_user_id),
     body: row.body,
     created_at: Number(row.created_at),
+    edited_at: row.edited_at === null ? null : Number(row.edited_at),
     thread_root_id: row.thread_root_id === null ? null : Number(row.thread_root_id),
+    attachment_id: row.attachment_id || null,
   };
+}
+
+export function updateMessage(db, messageId, roomId, body) {
+  const editedAt = Date.now();
+  const info = db
+    .prepare('UPDATE messages SET body = ?, edited_at = ? WHERE id = ? AND room_id = ?')
+    .run(body, editedAt, messageId, roomId);
+  return info.changes ? editedAt : undefined;
+}
+
+export function deleteMessage(db, messageId, roomId) {
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM messages WHERE thread_root_id = ? AND room_id = ?').run(messageId, roomId);
+    const info = db.prepare('DELETE FROM messages WHERE id = ? AND room_id = ?').run(messageId, roomId);
+    db.exec('COMMIT');
+    return info.changes > 0;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 /**
@@ -195,6 +466,324 @@ export function upsertUser(db, nickname) {
     nickname,
     Date.now(),
   );
+}
+
+function mapAccount(row, includePasswordHash = false) {
+  if (!row) return undefined;
+  const account = {
+    id: Number(row.id),
+    username: row.nickname,
+    display_name: row.display_name || null,
+    bio: row.bio || '',
+    avatar: row.avatar_id
+      ? {
+          id: row.avatar_id,
+          name: row.avatar_name,
+          mime_type: row.avatar_mime_type,
+          size: Number(row.avatar_size),
+          url: `/uploads/${row.avatar_id}`,
+        }
+      : null,
+    role: row.role,
+    created_at: Number(row.created_at),
+  };
+  if (includePasswordHash) account.password_hash = row.password_hash;
+  return account;
+}
+
+export function createAccount(db, username, passwordHash) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const existing = db
+      .prepare('SELECT id, nickname, password_hash, role, created_at FROM users WHERE nickname = ?')
+      .get(username);
+    if (existing?.password_hash) {
+      const error = new Error('account exists');
+      error.code = 'ACCOUNT_EXISTS';
+      throw error;
+    }
+    const { count } = db
+      .prepare('SELECT COUNT(*) AS count FROM users WHERE password_hash IS NOT NULL')
+      .get();
+    const role = Number(count) === 0 ? 'owner' : 'member';
+    let userId;
+    let createdAt;
+    if (existing) {
+      userId = Number(existing.id);
+      createdAt = Number(existing.created_at);
+      db.prepare('UPDATE users SET password_hash = ?, role = ? WHERE id = ?').run(
+        passwordHash,
+        role,
+        userId,
+      );
+    } else {
+      createdAt = Date.now();
+      const info = db
+        .prepare(
+          'INSERT INTO users (nickname, password_hash, role, created_at) VALUES (?, ?, ?, ?)',
+        )
+        .run(username, passwordHash, role, createdAt);
+      userId = Number(info.lastInsertRowid);
+    }
+    db.exec('COMMIT');
+    return { id: userId, username, display_name: null, bio: '', avatar: null, role, created_at: createdAt };
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function getAccountByUsername(db, username) {
+  return mapAccount(
+    db
+      .prepare(
+        `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio, u.created_at,
+                a.id AS avatar_id, a.original_name AS avatar_name,
+                a.mime_type AS avatar_mime_type, a.size AS avatar_size
+         FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
+         WHERE u.nickname = ? AND u.password_hash IS NOT NULL`,
+      )
+      .get(username),
+    true,
+  );
+}
+
+export function listAccounts(db) {
+  return db
+    .prepare(
+      `SELECT u.id, u.nickname, u.role, u.display_name, u.bio, u.created_at,
+              a.id AS avatar_id, a.original_name AS avatar_name,
+              a.mime_type AS avatar_mime_type, a.size AS avatar_size
+       FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
+       WHERE u.password_hash IS NOT NULL ORDER BY u.nickname COLLATE NOCASE ASC`,
+    )
+    .all()
+    .map((row) => mapAccount(row));
+}
+
+export function setAccountRole(db, userId, role) {
+  const info = db
+    .prepare("UPDATE users SET role = ? WHERE id = ? AND role != 'owner' AND password_hash IS NOT NULL")
+    .run(role, userId);
+  return Number(info.changes);
+}
+
+export function setAccountProfile(db, userId, displayName, bio, avatarAttachmentId) {
+  const info = db
+    .prepare(
+      `UPDATE users SET display_name = ?, bio = ?, avatar_attachment_id = ?
+       WHERE id = ? AND password_hash IS NOT NULL`,
+    )
+    .run(displayName, bio, avatarAttachmentId, userId);
+  if (!info.changes) return undefined;
+  return listAccounts(db).find((user) => user.id === userId);
+}
+
+export function createSession(db, tokenHash, userId, expiresAt) {
+  db.prepare(
+    'INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)',
+  ).run(tokenHash, userId, expiresAt, Date.now());
+}
+
+export function getAccountBySession(db, tokenHash, now = Date.now()) {
+  return mapAccount(
+    db
+      .prepare(
+        `SELECT u.id, u.nickname, u.role, u.display_name, u.bio, u.created_at,
+                a.id AS avatar_id, a.original_name AS avatar_name,
+                a.mime_type AS avatar_mime_type, a.size AS avatar_size
+         FROM sessions s JOIN users u ON u.id = s.user_id
+         LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
+         WHERE s.token_hash = ? AND s.expires_at > ? AND u.password_hash IS NOT NULL`,
+      )
+      .get(tokenHash, now),
+  );
+}
+
+export function deleteSession(db, tokenHash) {
+  return Number(db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash).changes);
+}
+
+export function deleteExpiredSessions(db, now = Date.now()) {
+  return Number(db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now).changes);
+}
+
+export function getMessageReactions(db, messageId) {
+  return reactionsByMessage(db, [messageId]).get(messageId) || [];
+}
+
+export function toggleReaction(db, messageId, roomId, userId, emoji) {
+  const message = db.prepare('SELECT id FROM messages WHERE id = ? AND room_id = ?').get(messageId, roomId);
+  if (!message) return undefined;
+  const existing = db
+    .prepare('SELECT 1 FROM reactions WHERE message_id = ? AND emoji = ? AND user_id = ?')
+    .get(messageId, emoji, userId);
+  if (existing) {
+    db.prepare('DELETE FROM reactions WHERE message_id = ? AND emoji = ? AND user_id = ?').run(
+      messageId,
+      emoji,
+      userId,
+    );
+  } else {
+    db.prepare(
+      'INSERT INTO reactions (message_id, emoji, user_id, created_at) VALUES (?, ?, ?, ?)',
+    ).run(messageId, emoji, userId, Date.now());
+  }
+  return getMessageReactions(db, messageId);
+}
+
+export function createStandaloneThread(db, roomId, user, title, body) {
+  const createdAt = Date.now();
+  db.exec('BEGIN');
+  try {
+    const info = db
+      .prepare(
+        `INSERT INTO standalone_threads (room_id, title, author_user_id, author, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(roomId, title, user.id, user.username, createdAt);
+    const threadId = Number(info.lastInsertRowid);
+    if (body) {
+      db.prepare(
+        `INSERT INTO standalone_thread_messages
+           (thread_id, author_user_id, author, body, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(threadId, user.id, user.username, body, createdAt);
+    }
+    db.exec('COMMIT');
+    return {
+      id: threadId,
+      room_id: roomId,
+      title,
+      author_user_id: user.id,
+      author: user.username,
+      created_at: createdAt,
+      reply_count: body ? 1 : 0,
+      last_activity_at: createdAt,
+    };
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function listStandaloneThreads(db, roomId) {
+  return db
+    .prepare(
+      `SELECT t.id, t.room_id, t.title, t.author_user_id, t.author, t.created_at,
+              COUNT(m.id) AS reply_count, COALESCE(MAX(m.created_at), t.created_at) AS last_activity_at
+       FROM standalone_threads t
+       LEFT JOIN standalone_thread_messages m ON m.thread_id = t.id
+       WHERE t.room_id = ?
+       GROUP BY t.id
+       ORDER BY last_activity_at DESC, t.id DESC`,
+    )
+    .all(roomId)
+    .map((row) => ({
+      id: Number(row.id),
+      room_id: Number(row.room_id),
+      title: row.title,
+      author_user_id: Number(row.author_user_id),
+      author: row.author,
+      created_at: Number(row.created_at),
+      reply_count: Number(row.reply_count),
+      last_activity_at: Number(row.last_activity_at),
+    }));
+}
+
+export function getStandaloneThread(db, threadId, roomId) {
+  const row = db
+    .prepare(
+      `SELECT id, room_id, title, author_user_id, author, created_at
+       FROM standalone_threads WHERE id = ? AND room_id = ?`,
+    )
+    .get(threadId, roomId);
+  if (!row) return undefined;
+  return {
+    id: Number(row.id),
+    room_id: Number(row.room_id),
+    title: row.title,
+    author_user_id: Number(row.author_user_id),
+    author: row.author,
+    created_at: Number(row.created_at),
+  };
+}
+
+export function getStandaloneThreadMessages(db, threadId, limit = 100) {
+  return db
+    .prepare(
+      `SELECT * FROM (
+         SELECT id, thread_id, author_user_id, author, body, created_at, edited_at
+         FROM standalone_thread_messages WHERE thread_id = ?
+         ORDER BY id DESC LIMIT ?
+       ) ORDER BY id ASC`,
+    )
+    .all(threadId, limit)
+    .map((row) => ({
+      id: Number(row.id),
+      thread_id: Number(row.thread_id),
+      author_user_id: Number(row.author_user_id),
+      author: row.author,
+      body: row.body,
+      created_at: Number(row.created_at),
+      edited_at: row.edited_at === null ? null : Number(row.edited_at),
+    }));
+}
+
+export function insertStandaloneThreadMessage(db, threadId, user, body) {
+  const createdAt = Date.now();
+  const info = db
+    .prepare(
+      `INSERT INTO standalone_thread_messages
+         (thread_id, author_user_id, author, body, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(threadId, user.id, user.username, body, createdAt);
+  return {
+    id: Number(info.lastInsertRowid),
+    thread_id: threadId,
+    author_user_id: user.id,
+    author: user.username,
+    body,
+    created_at: createdAt,
+    edited_at: null,
+  };
+}
+
+export function getStandaloneThreadMessage(db, messageId, threadId) {
+  const row = db
+    .prepare(
+      `SELECT id, thread_id, author_user_id, author, body, created_at, edited_at
+       FROM standalone_thread_messages WHERE id = ? AND thread_id = ?`,
+    )
+    .get(messageId, threadId);
+  if (!row) return undefined;
+  return {
+    id: Number(row.id),
+    thread_id: Number(row.thread_id),
+    author_user_id: Number(row.author_user_id),
+    author: row.author,
+    body: row.body,
+    created_at: Number(row.created_at),
+    edited_at: row.edited_at === null ? null : Number(row.edited_at),
+  };
+}
+
+export function updateStandaloneThreadMessage(db, messageId, threadId, body) {
+  const editedAt = Date.now();
+  const info = db
+    .prepare(
+      'UPDATE standalone_thread_messages SET body = ?, edited_at = ? WHERE id = ? AND thread_id = ?',
+    )
+    .run(body, editedAt, messageId, threadId);
+  return info.changes ? editedAt : undefined;
+}
+
+export function deleteStandaloneThreadMessage(db, messageId, threadId) {
+  const info = db
+    .prepare('DELETE FROM standalone_thread_messages WHERE id = ? AND thread_id = ?')
+    .run(messageId, threadId);
+  return info.changes > 0;
 }
 
 /**

@@ -65,25 +65,47 @@ function nextMessage(ws) {
 }
 
 test('T01 resolveConfig: 全 env を渡すと各値が反映される', () => {
-  const env = { PORT: '8080', HOST: '127.0.0.1', DB_PATH: '/tmp/x.db', ADMIN_PASSWORD: 'secret' };
+  const env = {
+    PORT: '8080',
+    HOST: '127.0.0.1',
+    DB_PATH: '/tmp/x.db',
+    BASIC_AUTH_USER: 'user',
+    BASIC_AUTH_PASSWORD: 'pass',
+  };
   const config = resolveConfig(env);
-  assert.deepEqual(config, { port: 8080, host: '127.0.0.1', dbPath: '/tmp/x.db', adminPassword: 'secret' });
+  assert.deepEqual(config, {
+    port: 8080,
+    host: '127.0.0.1',
+    dbPath: '/tmp/x.db',
+    basicAuth: { user: 'user', password: 'pass' },
+  });
 });
 
 test('T02_boundary resolveConfig: env 未設定なら既定値', () => {
   const config = resolveConfig({});
-  assert.deepEqual(config, { port: 3000, host: undefined, dbPath: 'data/chat.db', adminPassword: undefined });
+  assert.deepEqual(config, {
+    port: 3000,
+    host: undefined,
+    dbPath: 'data/chat.db',
+    basicAuth: undefined,
+  });
 });
 
-test('T03_boundary resolveConfig: ADMIN_PASSWORD 空文字は undefined 正規化', () => {
-  const config = resolveConfig({ ADMIN_PASSWORD: '' });
-  assert.equal(config.adminPassword, undefined);
+test('T03_boundary resolveConfig: 廃止済みADMIN_PASSWORDは設定へ露出しない', () => {
+  const config = resolveConfig({ ADMIN_PASSWORD: 'legacy-secret' });
+  assert.equal('adminPassword' in config, false);
 });
 
 test('T04 .env.example が resolveConfig 参照キーを網羅', async () => {
   const envExamplePath = path.join(__dirname, '..', '.env.example');
   const content = await readFile(envExamplePath, 'utf8');
-  for (const key of ['PORT', 'HOST', 'DB_PATH', 'ADMIN_PASSWORD']) {
+  for (const key of [
+    'PORT',
+    'HOST',
+    'DB_PATH',
+    'BASIC_AUTH_USER',
+    'BASIC_AUTH_PASSWORD',
+  ]) {
     assert.match(content, new RegExp(`^${key}=`, 'm'), `.env.example に ${key} が見つからない`);
   }
 });
@@ -99,15 +121,13 @@ test('T05b_boundary resolveConfig: 前後空白付き/空白のみ PORT', () => 
   assert.equal(resolveConfig({ PORT: '   ' }).port, 3000);
 });
 
-test('T05c_boundary resolveConfig: HOST/DB_PATH/ADMIN_PASSWORD 空白のみは未設定扱い', () => {
-  const config = resolveConfig({ HOST: '   ', DB_PATH: '   ', ADMIN_PASSWORD: '   ' });
+test('T05c_boundary resolveConfig: HOST/DB_PATH 空白のみは未設定扱い', () => {
+  const config = resolveConfig({ HOST: '   ', DB_PATH: '   ' });
   assert.equal(config.host, undefined);
   assert.equal(config.dbPath, 'data/chat.db');
-  assert.equal(config.adminPassword, undefined);
 });
 
-test('T06 admin 有効/無効の回帰（createChatServer 経由）', async () => {
-  // (a) adminPassword 未設定 → admin_auth で error/admin_disabled
+test('T06 旧admin_authはADMIN_PASSWORDの有無にかかわらず無効', async () => {
   const ctxDisabled = await startServer();
   try {
     const client = new WebSocket(ctxDisabled.url);
@@ -122,7 +142,7 @@ test('T06 admin 有効/無効の回帰（createChatServer 経由）', async () =
     await stopServer(ctxDisabled);
   }
 
-  // (b) 設定あり＋正しい合言葉 → admin_auth_ok
+  // createChatServerへ旧引数を渡しても権限は得られない。
   const ctxEnabled = await startServer({ adminPassword: 'correct-horse' });
   try {
     const client = new WebSocket(ctxEnabled.url);
@@ -130,24 +150,10 @@ test('T06 admin 有効/無効の回帰（createChatServer 経由）', async () =
     const okPromise = nextMessage(client);
     client.send(JSON.stringify({ type: 'admin_auth', password: 'correct-horse' }));
     const okResponse = await okPromise;
-    assert.equal(okResponse.type, 'admin_auth_ok');
+    assert.equal(okResponse.type, 'error');
+    assert.equal(okResponse.reason, 'admin_disabled');
     await closeClient(client);
   } finally {
     await stopServer(ctxEnabled);
-  }
-
-  // (c) 設定あり＋誤り → error/bad_admin_password
-  const ctxWrong = await startServer({ adminPassword: 'correct-horse' });
-  try {
-    const client = new WebSocket(ctxWrong.url);
-    await waitForOpen(client);
-    const badPromise = nextMessage(client);
-    client.send(JSON.stringify({ type: 'admin_auth', password: 'wrong-guess' }));
-    const badResponse = await badPromise;
-    assert.equal(badResponse.type, 'error');
-    assert.equal(badResponse.reason, 'bad_admin_password');
-    await closeClient(client);
-  } finally {
-    await stopServer(ctxWrong);
   }
 });

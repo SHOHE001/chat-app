@@ -1,104 +1,146 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>チャット</title>
-<link rel="stylesheet" href="/style.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1e1f22">
+  <title>Chat Lab</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div id="join-overlay" class="overlay">
-    <form id="join-form" class="join-form">
-      <h1>ニックネームを入力</h1>
-      <input
-        id="nickname-input"
-        type="text"
-        maxlength="32"
-        placeholder="ニックネーム"
-        autocomplete="off"
-        required
-      />
-      <button type="submit">入室</button>
-      <p id="join-error" class="error" role="alert"></p>
-    </form>
-  </div>
-
-  <div id="chat-screen" class="chat-screen hidden">
-    <div id="thread-overlay" class="thread-overlay hidden"></div>
-    <aside id="thread-panel" class="thread-panel">
-      <div class="thread-panel-header">
-        <span>スレッド</span>
-        <button id="thread-close" type="button" class="thread-close" aria-label="スレッドパネルを閉じる">×</button>
-      </div>
-      <div id="thread-root" class="thread-root"></div>
-      <ul id="thread-reply-list" class="thread-reply-list"></ul>
-      <form id="thread-reply-form" class="thread-reply-form">
-        <input
-          id="thread-reply-input"
-          type="text"
-          maxlength="2000"
-          placeholder="返信を入力"
-          autocomplete="off"
-        />
-        <button type="submit">送信</button>
+  <main id="auth-screen" class="auth-screen">
+    <section class="auth-card" aria-labelledby="auth-title">
+      <div class="brand-mark" aria-hidden="true">C</div>
+      <h1 id="auth-title">おかえりなさい</h1>
+      <p id="auth-description">アカウントでチャットに入る</p>
+      <form id="auth-form">
+        <label>ユーザー名<input id="username-input" maxlength="32" autocomplete="username" required></label>
+        <label>パスワード<input id="password-input" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label>
+        <p id="auth-error" class="form-error" role="alert" aria-live="assertive"></p>
+        <button id="auth-submit" class="primary-button" type="submit" disabled>接続中…</button>
       </form>
+      <p class="auth-switch"><span id="auth-switch-label">アカウントが必要ですか？</span> <button id="auth-mode-toggle" type="button">登録</button></p>
+      <p class="auth-note">最初に登録したアカウントがオーナーになります。</p>
+    </section>
+  </main>
+
+  <div id="app" class="app hidden">
+    <div id="nav-scrim" class="scrim hidden"></div>
+    <aside id="nav" class="nav">
+      <div class="workspace-title">Chat Lab <span>⌄</span></div>
+      <div class="nav-scroll">
+        <div class="nav-heading"><span>テキストチャンネル</span><button id="add-room-button" class="icon-button hidden" title="チャンネルを作成">＋</button></div>
+        <ul id="room-list" class="nav-list"></ul>
+        <div class="nav-heading"><span>スレッド</span><button id="add-thread-button" class="icon-button" title="スレッドを作成">＋</button></div>
+        <ul id="thread-list" class="nav-list thread-list"></ul>
+      </div>
+      <div class="account-bar">
+        <div id="my-avatar" class="avatar small"></div>
+        <div class="account-copy"><strong id="my-name"></strong><span id="my-role"></span></div>
+        <button id="profile-button" class="icon-button" title="プロフィールを編集">✎</button>
+        <button id="logout-button" class="icon-button" title="ログアウト">↪</button>
+      </div>
     </aside>
 
-    <div id="sidebar-overlay" class="sidebar-overlay hidden"></div>
-    <aside id="sidebar" class="sidebar">
-      <div class="sidebar-header">
-        <span>ルーム</span>
-        <button id="sidebar-close" type="button" class="sidebar-close" aria-label="サイドバーを閉じる">×</button>
-      </div>
-      <ul id="room-list" class="room-list"></ul>
-
-      <div id="admin-login" class="admin-login">
-        <button id="admin-login-toggle" type="button" class="admin-login-toggle">管理者ログイン</button>
-        <form id="admin-login-form" class="admin-login-form hidden">
-          <input
-            id="admin-password-input"
-            type="password"
-            placeholder="合言葉"
-            autocomplete="off"
-          />
-          <button type="submit">ログイン</button>
-          <p id="admin-login-error" class="error" role="alert"></p>
+    <section class="chat-column">
+      <header class="topbar">
+        <button id="nav-open" class="mobile-button" aria-label="メニューを開く">☰</button>
+        <span class="hash">#</span><strong id="room-name">全体</strong>
+        <span id="connection-status" class="connection-status">接続中…</span>
+        <button id="members-toggle" class="mobile-button members-button" aria-label="メンバーを表示">♟</button>
+      </header>
+      <div id="message-list" class="message-list" aria-live="polite"></div>
+      <div class="composer-wrap">
+        <div id="mention-menu" class="mention-menu hidden"></div>
+        <div id="upload-panel" class="upload-panel hidden">
+          <div id="upload-icon" class="upload-icon" aria-hidden="true">📎</div>
+          <div class="upload-copy">
+            <strong id="upload-name"></strong>
+            <span id="upload-status"></span>
+            <div class="upload-progress"><span id="upload-progress-bar"></span></div>
+          </div>
+          <button id="upload-remove" class="icon-button" type="button" aria-label="添付を取り消す">×</button>
+        </div>
+        <form id="message-form" class="composer">
+          <input id="file-input" type="file" hidden>
+          <button id="attach-button" class="composer-plus" type="button" aria-label="写真、動画、ファイルを添付">＋</button>
+          <textarea id="message-input" rows="1" maxlength="2000" placeholder="#全体 へメッセージ" autocomplete="off"></textarea>
+          <button class="send-button" type="submit" aria-label="送信">➤</button>
         </form>
       </div>
+    </section>
 
-      <form id="create-room-form" class="create-room-form hidden">
-        <input
-          id="create-room-input"
-          type="text"
-          maxlength="32"
-          placeholder="新しいルーム名"
-          autocomplete="off"
-        />
-        <button type="submit">作成</button>
-        <p id="create-room-error" class="error" role="alert"></p>
-      </form>
+    <aside id="members" class="members-panel">
+      <div class="members-heading">メンバー — <span id="member-count">0</span></div>
+      <div id="member-list"></div>
     </aside>
 
-    <div class="chat-main">
-      <header class="chat-header">
-        <button id="sidebar-open" type="button" class="sidebar-open" aria-label="サイドバーを開く">☰</button>
-        <span id="room-name">全体</span>
-        <span id="connection-status" class="status"></span>
-      </header>
-      <ul id="message-list" class="message-list"></ul>
-      <form id="message-form" class="message-form">
-        <input
-          id="message-input"
-          type="text"
-          maxlength="2000"
-          placeholder="メッセージを入力"
-          autocomplete="off"
-        />
-        <button type="submit">送信</button>
+    <div id="thread-scrim" class="scrim hidden"></div>
+    <aside id="thread-panel" class="detail-panel">
+      <header class="detail-header"><div><small>スレッド</small><strong id="thread-title"></strong></div><button id="thread-close" class="icon-button" aria-label="閉じる">×</button></header>
+      <div id="thread-messages" class="thread-messages"></div>
+      <form id="thread-reply-form" class="composer compact">
+        <textarea id="thread-reply-input" rows="1" maxlength="2000" placeholder="返信する"></textarea>
+        <button class="send-button" type="submit" aria-label="返信を送信">➤</button>
       </form>
-    </div>
+    </aside>
   </div>
 
+  <dialog id="create-thread-dialog">
+    <form id="create-thread-form" method="dialog" class="dialog-form">
+      <header><div><h2>新しいスレッド</h2><p>話題を分けて、まとまった会話を始めます。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <label>タイトル<input id="thread-title-input" maxlength="80" required placeholder="例: UIの改善案"></label>
+      <label>最初の投稿（任意）<textarea id="thread-body-input" maxlength="2000" rows="4" placeholder="@メンバー を使って知らせることもできます"></textarea></label>
+      <p id="thread-create-error" class="form-error"></p>
+      <footer><button value="cancel" class="secondary-button">キャンセル</button><button id="thread-create-submit" value="default" class="primary-button">作成</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="create-room-dialog">
+    <form id="create-room-form" method="dialog" class="dialog-form">
+      <header><div><h2>チャンネルを作成</h2><p>admin以上の権限で管理できます。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <label>チャンネル名<input id="room-name-input" maxlength="32" required placeholder="新しいチャンネル"></label>
+      <p id="room-create-error" class="form-error"></p>
+      <footer><button value="cancel" class="secondary-button">キャンセル</button><button id="room-create-submit" value="default" class="primary-button">作成</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="edit-message-dialog">
+    <form id="edit-message-form" method="dialog" class="dialog-form">
+      <header><div><h2>メッセージを編集</h2><p>添付ファイルはそのまま残ります。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <label>本文<textarea id="edit-message-input" maxlength="2000" rows="5"></textarea></label>
+      <p id="edit-message-error" class="form-error"></p>
+      <footer><button value="cancel" class="secondary-button">キャンセル</button><button value="save" class="primary-button">保存</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="profile-dialog" class="profile-dialog">
+    <form id="profile-form" method="dialog">
+      <header class="profile-header">
+        <button value="cancel" class="icon-button profile-close" aria-label="閉じる">×</button>
+      </header>
+      <section class="profile-content">
+        <div id="profile-avatar" class="avatar profile-avatar"></div>
+        <h2 id="profile-name"></h2>
+        <span id="profile-handle"></span>
+        <span id="profile-role" class="role-badge"></span>
+        <p id="profile-bio-view" class="profile-bio"></p>
+        <div id="profile-edit-fields" class="profile-edit-fields hidden">
+          <input id="profile-avatar-input" type="file" accept="image/*" hidden>
+          <button id="profile-avatar-button" type="button" class="secondary-button">アイコン画像を選ぶ</button>
+          <span id="profile-avatar-status" class="profile-upload-status">5MB以下の画像</span>
+          <label>表示名<input id="profile-display-name-input" maxlength="32" placeholder="未設定ならユーザー名を表示"></label>
+          <label>自己紹介<textarea id="profile-bio-input" maxlength="160" rows="4" placeholder="好きなことや今していること"></textarea></label>
+        </div>
+      </section>
+      <footer id="profile-footer" class="profile-footer hidden">
+        <button value="cancel" class="secondary-button">キャンセル</button>
+        <button id="profile-save" value="save" class="primary-button">保存</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden" role="status"></div>
   <script src="/app.js"></script>
 </body>
 </html>

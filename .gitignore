@@ -11,3 +11,8 @@ node_modules/
 *.db
 data/
 .env
+
+# Local Codex / gloop runtime state and generated deployment artifacts
+.codex/
+features/.dashboard.md
+features/deploy-artifacts/
