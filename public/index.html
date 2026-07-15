@@ -64,7 +64,10 @@
         <form id="message-form" class="composer">
           <input id="file-input" type="file" hidden>
           <button id="attach-button" class="composer-plus" type="button" aria-label="写真、動画、ファイルを添付">＋</button>
-          <textarea id="message-input" rows="1" maxlength="2000" placeholder="#全体 へメッセージ" autocomplete="off"></textarea>
+          <div id="composer-input-shell" class="composer-input-shell">
+            <div id="mention-highlight" class="composer-highlight" aria-hidden="true"></div>
+            <textarea id="message-input" rows="1" maxlength="2000" placeholder="#全体 へメッセージ" autocomplete="off"></textarea>
+          </div>
           <button class="send-button" type="submit" aria-label="送信">➤</button>
         </form>
       </div>
@@ -111,6 +114,14 @@
       <label>本文<textarea id="edit-message-input" maxlength="2000" rows="5"></textarea></label>
       <p id="edit-message-error" class="form-error"></p>
       <footer><button value="cancel" class="secondary-button">キャンセル</button><button value="save" class="primary-button">保存</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="delete-message-dialog" class="delete-message-dialog">
+    <form id="delete-message-form" method="dialog" class="dialog-form">
+      <header><div><h2>メッセージを削除</h2><p>この操作は取り消せません。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <blockquote id="delete-message-preview" class="delete-message-preview"></blockquote>
+      <footer><button value="cancel" class="secondary-button">キャンセル</button><button value="delete" class="danger-button">削除する</button></footer>
     </form>
   </dialog>
 

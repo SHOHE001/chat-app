@@ -23,6 +23,8 @@
   const messageList = $('message-list');
   const messageForm = $('message-form');
   const messageInput = $('message-input');
+  const composerInputShell = $('composer-input-shell');
+  const mentionHighlight = $('mention-highlight');
   const fileInput = $('file-input');
   const attachButton = $('attach-button');
   const uploadPanel = $('upload-panel');
@@ -40,6 +42,7 @@
   const profileAvatarInput = $('profile-avatar-input');
   const editMessageDialog = $('edit-message-dialog');
   const editMessageInput = $('edit-message-input');
+  const deleteMessageDialog = $('delete-message-dialog');
 
   let ws;
   let reconnectTimer;
@@ -60,6 +63,7 @@
   let profileAvatarId = null;
   let profileUploadRequest = null;
   let editingTarget = null;
+  let deletingTarget = null;
 
   function socketUrl() {
     return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/`;
@@ -226,6 +230,7 @@
       }
       renderMembers();
       if (messages.length) renderMessages(false);
+      renderComposerHighlight();
       return;
     }
     if (data.type === 'profile_updated') {
@@ -361,6 +366,7 @@
     renderThreads();
     renderMembers();
     renderMessages(true);
+    renderComposerHighlight();
     updateRoomHeader();
   }
 
@@ -537,12 +543,7 @@
     remove.title = 'メッセージを削除';
     remove.addEventListener('click', () => {
       row.classList.remove('reaction-open', 'message-menu-open');
-      if (!confirm('このメッセージを削除しますか？')) return;
-      if (kind === 'thread') {
-        send('delete_thread_message', { threadId: openThread?.id, messageId: message.id });
-      } else {
-        send('delete_message', { messageId: message.id });
-      }
+      openDeleteMessage(message, kind);
     });
     fragment.append(divider, edit, remove);
     return fragment;
@@ -562,6 +563,17 @@
       editMessageInput.focus();
       editMessageInput.setSelectionRange(editMessageInput.value.length, editMessageInput.value.length);
     });
+  }
+
+  function openDeleteMessage(message, kind) {
+    deletingTarget = {
+      kind,
+      messageId: message.id,
+      threadId: kind === 'thread' ? openThread?.id : null,
+    };
+    const preview = message.body?.trim() || (message.attachment ? `添付: ${message.attachment.name}` : '本文なし');
+    $('delete-message-preview').textContent = preview;
+    deleteMessageDialog.showModal();
   }
 
   function renderMessages(scrollToBottom) {
@@ -933,6 +945,26 @@
     input.style.height = `${Math.min(input.scrollHeight, 190)}px`;
   }
 
+  function renderComposerHighlight() {
+    const names = new Set(users.map((user) => user.username));
+    const value = messageInput.value;
+    const fragment = document.createDocumentFragment();
+    for (const part of value.split(/(@[^\s@]+)/g)) {
+      const username = part.startsWith('@') ? part.slice(1) : '';
+      if (username && names.has(username)) {
+        const mention = document.createElement('span');
+        mention.className = 'composer-highlight-mention';
+        mention.textContent = part;
+        fragment.append(mention);
+      } else {
+        fragment.append(document.createTextNode(part));
+      }
+    }
+    if (value.endsWith('\n')) fragment.append(document.createTextNode('\u200b'));
+    mentionHighlight.replaceChildren(fragment);
+    mentionHighlight.scrollTop = messageInput.scrollTop;
+  }
+
   function keepKeyboardOpen(input) {
     input.focus({ preventScroll: true });
     requestAnimationFrame(() => input.focus({ preventScroll: true }));
@@ -962,6 +994,8 @@
         const start = cursor - match[1].length - 1;
         messageInput.setRangeText(`@${user.username} `, start, cursor, 'end');
         mentionMenu.classList.add('hidden');
+        resizeTextarea(messageInput);
+        renderComposerHighlight();
         messageInput.focus();
       });
       mentionMenu.append(button);
@@ -997,10 +1031,18 @@
     messageInput.value = '';
     clearAttachment(false);
     resizeTextarea(messageInput);
+    renderComposerHighlight();
     mentionMenu.classList.add('hidden');
     keepKeyboardOpen(messageInput);
   });
-  messageInput.addEventListener('input', () => { resizeTextarea(messageInput); renderMentionMenu(); });
+  messageInput.addEventListener('input', () => {
+    resizeTextarea(messageInput);
+    renderComposerHighlight();
+    renderMentionMenu();
+  });
+  messageInput.addEventListener('scroll', () => {
+    mentionHighlight.scrollTop = messageInput.scrollTop;
+  });
   attachButton.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => uploadFile(fileInput.files?.[0]));
   $('upload-remove').addEventListener('click', () => clearAttachment());
@@ -1110,7 +1152,29 @@
     editMessageDialog.close();
   });
   editMessageDialog.addEventListener('close', () => { editingTarget = null; });
+  $('delete-message-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (event.submitter?.value === 'cancel') {
+      deletingTarget = null;
+      deleteMessageDialog.close();
+      return;
+    }
+    if (!deletingTarget) return;
+    if (deletingTarget.kind === 'thread') {
+      send('delete_thread_message', {
+        threadId: deletingTarget.threadId,
+        messageId: deletingTarget.messageId,
+      });
+    } else {
+      send('delete_message', { messageId: deletingTarget.messageId });
+    }
+    deletingTarget = null;
+    deleteMessageDialog.close();
+  });
+  deleteMessageDialog.addEventListener('close', () => { deletingTarget = null; });
 
+  composerInputShell.classList.add('highlight-enabled');
+  renderComposerHighlight();
   setAuthMode('login');
   connect();
 })();

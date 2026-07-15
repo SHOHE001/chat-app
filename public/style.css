@@ -120,6 +120,12 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .composer { display: flex; align-items: flex-end; gap: 6px; min-height: 44px; padding: 0 6px; border-radius: var(--radius); background: var(--raised); }
 .composer textarea { max-height: 190px; min-height: 44px; padding: 12px 4px; color: var(--text); background: transparent; line-height: 20px; }
 .composer textarea:focus { box-shadow: none; }
+.composer-input-shell { position: relative; min-width: 0; min-height: 44px; flex: 1; }
+.composer-input-shell textarea, .composer-highlight { width: 100%; max-height: 190px; min-height: 44px; padding: 12px 4px; border: 0; font: inherit; line-height: 20px; letter-spacing: inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
+.composer-highlight { position: absolute; z-index: 0; inset: 0; overflow: hidden; color: var(--text); pointer-events: none; }
+.composer-highlight-mention { color: #62c9ff; font-weight: 650; }
+.composer-input-shell.highlight-enabled textarea { position: relative; z-index: 1; caret-color: var(--text); color: transparent; -webkit-text-fill-color: transparent; }
+.composer-input-shell.highlight-enabled textarea::placeholder { color: var(--muted); -webkit-text-fill-color: var(--muted); opacity: 1; }
 .composer-plus, .send-button { width: 34px; height: 40px; flex: 0 0 auto; border: 0; color: var(--muted); background: transparent; cursor: pointer; }
 .composer-plus { font-size: 26px; }
 .send-button { font-size: 18px; }
@@ -196,6 +202,9 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
 .dialog-form textarea { min-height: 92px; }
 .dialog-form footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; padding: 14px 22px; background: #2b2d31; }
 .dialog-form footer .primary-button { width: auto; margin: 0; }
+.danger-button { min-height: 40px; padding: 0 18px; border: 0; border-radius: 4px; color: #fff; background: #da373c; font-weight: 650; cursor: pointer; }
+.danger-button:hover { background: #a1282d; }
+.delete-message-preview { max-height: 150px; overflow: auto; margin: 20px 22px 0; padding: 12px 14px; border-left: 3px solid var(--danger); border-radius: 3px; color: #dbdee1; background: #2b2d31; overflow-wrap: anywhere; white-space: pre-wrap; }
 .toast { position: fixed; z-index: 100; right: 20px; bottom: 20px; max-width: 360px; padding: 11px 15px; border-radius: 5px; color: white; background: #111214; box-shadow: 0 7px 20px rgba(0,0,0,.4); }
 
 @media (max-width: 980px) {
