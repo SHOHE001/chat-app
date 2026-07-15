@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
+import webpush from 'web-push';
 import {
   openDb,
   insertMessage,
@@ -43,6 +44,12 @@ import {
   deleteStandaloneThreadMessage,
   createAttachment,
   getAttachmentById,
+  getAppConfig,
+  setAppConfig,
+  upsertPushSubscription,
+  removePushSubscription,
+  deletePushSubscriptionByEndpoint,
+  listPushSubscriptions,
 } from './db.js';
 
 const MIN_NODE_VERSION = '22.22.3';
@@ -56,11 +63,14 @@ const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 const ALLOWED_REACTIONS = new Set(['👍', '❤️', '😂', '🎉', '👀']);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_PUSH_API_BYTES = 16 * 1024;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.svg': 'image/svg+xml; charset=utf-8',
   '.ico': 'image/x-icon',
 };
 
@@ -162,7 +172,9 @@ function serveStatic(req, res, root, rootReal) {
     return;
   }
 
-  res.writeHead(200, { 'Content-Type': getMimeType(targetReal) });
+  const headers = { 'Content-Type': getMimeType(targetReal) };
+  if (path.basename(targetReal) === 'sw.js') headers['Cache-Control'] = 'no-cache';
+  res.writeHead(200, headers);
   if (req.method === 'HEAD') {
     res.end();
     return;
@@ -335,7 +347,11 @@ export function resolveConfig(env = process.env) {
   }
   const basicAuth =
     basicAuthUser === undefined ? undefined : { user: basicAuthUser, password: basicAuthPassword };
-  return { port, host, dbPath, basicAuth };
+  const vapidSubject = normalizeStr(env.VAPID_SUBJECT) ?? 'mailto:chat-app@localhost';
+  if (!/^(mailto:|https:\/\/)/.test(vapidSubject)) {
+    throw new Error('VAPID_SUBJECT は mailto: または https:// で始めてください');
+  }
+  return { port, host, dbPath, basicAuth, vapidSubject };
 }
 
 // undefined/空/空白のみ → undefined。それ以外は trim した文字列。
@@ -374,12 +390,29 @@ function parsePort(raw) {
  * createChatServer({ dbPath, staticDir, basicAuth }) → { server, wss, db, close }
  * トップレベルでは listen しない。
  */
-export function createChatServer({ dbPath, staticDir, basicAuth }) {
+export function createChatServer({
+  dbPath,
+  staticDir,
+  basicAuth,
+  vapidSubject = 'mailto:chat-app@localhost',
+  pushTransport = webpush,
+}) {
   assertBasicAuthConfig(basicAuth);
   const root = path.resolve(staticDir);
   const rootReal = fs.realpathSync(root);
 
   const db = openDb(dbPath);
+  let vapidPublicKey = getAppConfig(db, 'vapid_public_key');
+  let vapidPrivateKey = getAppConfig(db, 'vapid_private_key');
+  if (!vapidPublicKey || !vapidPrivateKey) {
+    const generated = pushTransport.generateVAPIDKeys();
+    vapidPublicKey = generated.publicKey;
+    vapidPrivateKey = generated.privateKey;
+    setAppConfig(db, 'vapid_public_key', vapidPublicKey);
+    setAppConfig(db, 'vapid_private_key', vapidPrivateKey);
+  }
+  pushTransport.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+  const pendingPushes = new Set();
   const defaultRoomId = getDefaultRoomId(db);
   const uploadsDir = path.resolve(path.dirname(dbPath), 'uploads');
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -408,6 +441,10 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
       handleUpload(req, res);
       return;
     }
+    if (pathname === '/api/push/public-key' || pathname === '/api/push/subscription') {
+      void handlePushApi(req, res, pathname);
+      return;
+    }
     if (pathname.startsWith('/uploads/')) {
       serveUpload(req, res, pathname.slice('/uploads/'.length));
       return;
@@ -420,6 +457,14 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
     res.end(JSON.stringify({ error }));
   }
 
+  function sendApiJson(res, status, payload) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify(payload));
+  }
+
   function accountFromRequest(req) {
     const headerToken = req.headers['x-session-token'];
     const bearer = req.headers.authorization;
@@ -428,6 +473,104 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
       : (typeof bearer === 'string' && bearer.startsWith('Bearer ') ? bearer.slice(7) : '');
     if (!token) return undefined;
     return getAccountBySession(db, hashSessionToken(token));
+  }
+
+  function readJsonBody(req) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > MAX_PUSH_API_BYTES) {
+          fail(new Error('too_large'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on('error', () => fail(new Error('bad_json')));
+      req.on('end', () => {
+        if (settled) return;
+        settled = true;
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        } catch {
+          reject(new Error('bad_json'));
+        }
+      });
+    });
+  }
+
+  function normalizePushSubscription(value) {
+    if (!value || typeof value !== 'object' || typeof value.endpoint !== 'string') return undefined;
+    let endpoint;
+    try {
+      const url = new URL(value.endpoint);
+      if (url.protocol !== 'https:') return undefined;
+      endpoint = url.toString();
+    } catch {
+      return undefined;
+    }
+    const p256dh = value.keys?.p256dh;
+    const auth = value.keys?.auth;
+    if (
+      endpoint.length > 2048 ||
+      typeof p256dh !== 'string' ||
+      typeof auth !== 'string' ||
+      !/^[A-Za-z0-9_-]{16,512}$/.test(p256dh) ||
+      !/^[A-Za-z0-9_-]{8,256}$/.test(auth)
+    ) {
+      return undefined;
+    }
+    return { endpoint, keys: { p256dh, auth } };
+  }
+
+  async function handlePushApi(req, res, pathname) {
+    const user = accountFromRequest(req);
+    if (!user) {
+      sendApiError(res, 401, 'not_authenticated');
+      return;
+    }
+    if (pathname === '/api/push/public-key') {
+      if (req.method !== 'GET') {
+        sendApiError(res, 405, 'method_not_allowed');
+        return;
+      }
+      sendApiJson(res, 200, { publicKey: vapidPublicKey });
+      return;
+    }
+    if (req.method !== 'POST' && req.method !== 'DELETE') {
+      sendApiError(res, 405, 'method_not_allowed');
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (error) {
+      sendApiError(res, error.message === 'too_large' ? 413 : 400, error.message);
+      return;
+    }
+    if (req.method === 'POST') {
+      const subscription = normalizePushSubscription(body);
+      if (!subscription) {
+        sendApiError(res, 400, 'bad_subscription');
+        return;
+      }
+      upsertPushSubscription(db, user.id, subscription);
+      sendApiJson(res, 201, { subscribed: true });
+      return;
+    }
+    if (!body || typeof body.endpoint !== 'string' || body.endpoint.length > 2048) {
+      sendApiError(res, 400, 'bad_subscription');
+      return;
+    }
+    removePushSubscription(db, user.id, body.endpoint);
+    sendApiJson(res, 200, { subscribed: false });
   }
 
   function handleUpload(req, res) {
@@ -606,6 +749,46 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
         client.send(payload);
       }
     }
+  }
+
+  function queuePushNotification({ excludeUserId, title, body, tag, url }) {
+    const task = (async () => {
+      const payload = JSON.stringify({
+        title,
+        body: String(body || '新しいメッセージ').slice(0, 180),
+        tag,
+        url,
+      });
+      const subscriptions = listPushSubscriptions(db, excludeUserId);
+      await Promise.allSettled(
+        subscriptions.map(async (subscription) => {
+          try {
+            await pushTransport.sendNotification(subscription, payload, {
+              TTL: 60 * 60,
+              urgency: 'normal',
+            });
+          } catch (error) {
+            if (error?.statusCode === 404 || error?.statusCode === 410) {
+              deletePushSubscriptionByEndpoint(db, subscription.endpoint);
+              return;
+            }
+            // Endpointや鍵をログへ出さず、配送失敗の種別だけを残す。
+            // eslint-disable-next-line no-console
+            console.warn(`chat-app: push delivery failed (${error?.statusCode || 'unknown'})`);
+          }
+        }),
+      );
+    })();
+    pendingPushes.add(task);
+    void task
+      .finally(() => pendingPushes.delete(task))
+      .catch(() => {});
+  }
+
+  function pushBody(body, attachment) {
+    const text = String(body || '').trim();
+    if (text) return text;
+    return attachment ? `📎 ${attachment.name}` : '新しいメッセージ';
   }
 
   function broadcastRooms() {
@@ -848,6 +1031,14 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
           attachmentId,
         );
         broadcastMessage(row);
+        const room = getRoomById(db, ws.roomId);
+        queuePushNotification({
+          excludeUserId: ws.user?.id ?? null,
+          title: `#${room?.name || 'チャット'} · ${ws.user?.display_name || ws.nickname}`,
+          body: pushBody(row.body, row.attachment),
+          tag: `message-${row.id}`,
+          url: `/?room=${ws.roomId}`,
+        });
         return;
       }
 
@@ -1061,6 +1252,13 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
         const thread = createStandaloneThread(db, ws.roomId, ws.user, title, body);
         sendJson(ws, { type: 'thread_created', thread });
         broadcastThreads(ws.roomId);
+        queuePushNotification({
+          excludeUserId: ws.user.id,
+          title: `新しいスレッド · ${ws.user.display_name || ws.user.username}`,
+          body: body || title,
+          tag: `thread-${thread.id}`,
+          url: `/?room=${ws.roomId}&thread=${thread.id}`,
+        });
         return;
       }
 
@@ -1099,6 +1297,13 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
         const message = insertStandaloneThreadMessage(db, thread.id, ws.user, body);
         broadcastToRoom(ws.roomId, { type: 'thread_message', threadId: thread.id, message });
         broadcastThreads(ws.roomId);
+        queuePushNotification({
+          excludeUserId: ws.user.id,
+          title: `${thread.title} · ${ws.user.display_name || ws.user.username}`,
+          body,
+          tag: `thread-message-${message.id}`,
+          url: `/?room=${ws.roomId}&thread=${thread.id}`,
+        });
         return;
       }
 
@@ -1184,8 +1389,10 @@ export function createChatServer({ dbPath, staticDir, basicAuth }) {
     }
     wss.close(() => {
       server.close(() => {
-        db.close();
-        if (callback) callback();
+        void Promise.allSettled([...pendingPushes]).then(() => {
+          db.close();
+          if (callback) callback();
+        });
       });
     });
   }
@@ -1203,10 +1410,10 @@ const isMainModule = (() => {
 
 if (isMainModule) {
   checkNodeVersion();
-  const { port, host, dbPath, basicAuth } = resolveConfig();
+  const { port, host, dbPath, basicAuth, vapidSubject } = resolveConfig();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const staticDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
-  const app = createChatServer({ dbPath, staticDir, basicAuth });
+  const app = createChatServer({ dbPath, staticDir, basicAuth, vapidSubject });
   if (host) {
     app.server.listen(port, host, () => {
       // eslint-disable-next-line no-console

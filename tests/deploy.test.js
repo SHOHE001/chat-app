@@ -71,6 +71,7 @@ test('T01 resolveConfig: 全 env を渡すと各値が反映される', () => {
     DB_PATH: '/tmp/x.db',
     BASIC_AUTH_USER: 'user',
     BASIC_AUTH_PASSWORD: 'pass',
+    VAPID_SUBJECT: 'https://example.com',
   };
   const config = resolveConfig(env);
   assert.deepEqual(config, {
@@ -78,6 +79,7 @@ test('T01 resolveConfig: 全 env を渡すと各値が反映される', () => {
     host: '127.0.0.1',
     dbPath: '/tmp/x.db',
     basicAuth: { user: 'user', password: 'pass' },
+    vapidSubject: 'https://example.com',
   });
 });
 
@@ -88,6 +90,7 @@ test('T02_boundary resolveConfig: env 未設定なら既定値', () => {
     host: undefined,
     dbPath: 'data/chat.db',
     basicAuth: undefined,
+    vapidSubject: 'mailto:chat-app@localhost',
   });
 });
 
@@ -105,9 +108,16 @@ test('T04 .env.example が resolveConfig 参照キーを網羅', async () => {
     'DB_PATH',
     'BASIC_AUTH_USER',
     'BASIC_AUTH_PASSWORD',
+    'VAPID_SUBJECT',
   ]) {
     assert.match(content, new RegExp(`^${key}=`, 'm'), `.env.example に ${key} が見つからない`);
   }
+});
+
+test('T05d_boundary resolveConfig: VAPID_SUBJECTは連絡先URIだけを受理', () => {
+  assert.equal(resolveConfig({ VAPID_SUBJECT: 'mailto:admin@example.com' }).vapidSubject, 'mailto:admin@example.com');
+  assert.equal(resolveConfig({ VAPID_SUBJECT: 'https://example.com/contact' }).vapidSubject, 'https://example.com/contact');
+  assert.throws(() => resolveConfig({ VAPID_SUBJECT: 'admin@example.com' }), /VAPID_SUBJECT/);
 });
 
 test('T05_boundary resolveConfig: 不正 PORT は throw（fail-fast）', () => {

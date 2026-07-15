@@ -4,7 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1e1f22">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Chat Lab</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -37,6 +42,7 @@
       <div class="account-bar">
         <div id="my-avatar" class="avatar small"></div>
         <div class="account-copy"><strong id="my-name"></strong><span id="my-role"></span></div>
+        <button id="notification-button" class="icon-button notification-button" type="button" title="通知を設定" aria-label="通知を設定" aria-pressed="false">🔔</button>
         <button id="profile-button" class="icon-button" title="プロフィールを編集">✎</button>
         <button id="logout-button" class="icon-button" title="ログアウト">↪</button>
       </div>

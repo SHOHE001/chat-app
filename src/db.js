@@ -72,6 +72,18 @@ CREATE TABLE IF NOT EXISTS standalone_thread_messages (
   created_at INTEGER NOT NULL,
   edited_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 /**
@@ -87,11 +99,11 @@ export function openDb(path) {
 
   // user_version: 0=新規、1=旧メッセージ、2=メッセージスレッド、
   // 3=アカウント/リアクション/独立スレッド、4=添付ファイル、5=プロフィール、
-  // 6=メッセージ編集日時。
+  // 6=メッセージ編集日時、7=Web Push購読とアプリ設定。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 6');
-    userVersion = 6;
+    db.exec('PRAGMA user_version = 7');
+    userVersion = 7;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -199,6 +211,32 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 6) {
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS app_config (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          endpoint TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          p256dh TEXT NOT NULL,
+          auth TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      db.exec('PRAGMA user_version = 7');
+      db.exec('COMMIT');
+      userVersion = 7;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_author_user ON messages(author_user_id)');
@@ -211,6 +249,7 @@ export function openDb(path) {
   db.exec(
     'CREATE INDEX IF NOT EXISTS idx_standalone_thread_messages_thread ON standalone_thread_messages(thread_id)',
   );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)');
   db.exec('PRAGMA foreign_keys = ON');
 
   // デフォルトルーム "全体" を投入（既存なら無視）。
@@ -748,6 +787,63 @@ export function insertStandaloneThreadMessage(db, threadId, user, body) {
     created_at: createdAt,
     edited_at: null,
   };
+}
+
+export function getAppConfig(db, key) {
+  return db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)?.value;
+}
+
+export function setAppConfig(db, key, value) {
+  db.prepare(
+    `INSERT INTO app_config (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run(key, value);
+}
+
+export function upsertPushSubscription(db, userId, subscription) {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO push_subscriptions
+       (endpoint, user_id, p256dh, auth, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET
+       user_id = excluded.user_id,
+       p256dh = excluded.p256dh,
+       auth = excluded.auth,
+       updated_at = excluded.updated_at`,
+  ).run(
+    subscription.endpoint,
+    userId,
+    subscription.keys.p256dh,
+    subscription.keys.auth,
+    now,
+    now,
+  );
+}
+
+export function removePushSubscription(db, userId, endpoint) {
+  return db
+    .prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?')
+    .run(endpoint, userId).changes > 0;
+}
+
+export function deletePushSubscriptionByEndpoint(db, endpoint) {
+  db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+}
+
+export function listPushSubscriptions(db, excludeUserId = null) {
+  const rows = excludeUserId === null
+    ? db.prepare('SELECT endpoint, user_id, p256dh, auth FROM push_subscriptions').all()
+    : db
+      .prepare(
+        'SELECT endpoint, user_id, p256dh, auth FROM push_subscriptions WHERE user_id != ?',
+      )
+      .all(excludeUserId);
+  return rows.map((row) => ({
+    user_id: Number(row.user_id),
+    endpoint: row.endpoint,
+    keys: { p256dh: row.p256dh, auth: row.auth },
+  }));
 }
 
 export function getStandaloneThreadMessage(db, messageId, threadId) {

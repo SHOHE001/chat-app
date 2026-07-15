@@ -28,6 +28,7 @@
   const fileInput = $('file-input');
   const attachButton = $('attach-button');
   const uploadPanel = $('upload-panel');
+  const notificationButton = $('notification-button');
   const mentionMenu = $('mention-menu');
   const membersPanel = $('members');
   const memberList = $('member-list');
@@ -64,6 +65,14 @@
   let profileUploadRequest = null;
   let editingTarget = null;
   let deletingTarget = null;
+  let serviceWorkerRegistration = null;
+  let notificationSetupPromise = null;
+  const launchParams = new URLSearchParams(location.search);
+  let notificationLaunch = {
+    roomId: Number(launchParams.get('room')) || null,
+    threadId: Number(launchParams.get('thread')) || null,
+  };
+  if (!notificationLaunch.roomId && !notificationLaunch.threadId) notificationLaunch = null;
 
   function socketUrl() {
     return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/`;
@@ -122,6 +131,175 @@
     const el = $('connection-status');
     el.textContent = text;
     el.classList.toggle('online', online);
+  }
+
+  function handleNotificationLaunch() {
+    if (!notificationLaunch) return;
+    const { roomId, threadId } = notificationLaunch;
+    if (roomId && roomId !== currentRoomId && rooms.some((room) => room.id === roomId)) {
+      send('switch_room', { roomId });
+      return;
+    }
+    if (threadId && threads.some((thread) => thread.id === threadId)) openThreadById(threadId);
+    notificationLaunch = null;
+    history.replaceState(null, '', location.pathname);
+  }
+
+  function supportsPushNotifications() {
+    return Boolean(
+      window.isSecureContext &&
+      'serviceWorker' in navigator &&
+      'PushManager' in window &&
+      'Notification' in window,
+    );
+  }
+
+  function isIosDevice() {
+    return /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  function isStandaloneApp() {
+    return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  }
+
+  function setNotificationButton(enabled, pending = false) {
+    notificationButton.classList.toggle('enabled', enabled);
+    notificationButton.classList.toggle('pending', pending);
+    notificationButton.disabled = pending;
+    notificationButton.setAttribute('aria-pressed', String(enabled));
+    notificationButton.textContent = '🔔';
+    notificationButton.title = enabled ? '通知オン（押すと解除）' : '通知をオンにする';
+    notificationButton.setAttribute('aria-label', notificationButton.title);
+  }
+
+  async function ensureNotificationSetup() {
+    if (!supportsPushNotifications()) {
+      // iOSの通常タブではPush APIが公開されないため、ベルを残して
+      // 「ホーム画面に追加」の案内へ到達できるようにする。
+      if (!(isIosDevice() && !isStandaloneApp())) notificationButton.classList.add('hidden');
+      return null;
+    }
+    if (!notificationSetupPromise) {
+      notificationSetupPromise = navigator.serviceWorker.register('/sw.js')
+        .then(async (registration) => {
+          serviceWorkerRegistration = registration;
+          const subscription = await registration.pushManager.getSubscription();
+          setNotificationButton(Boolean(subscription));
+          return registration;
+        })
+        .catch(() => {
+          notificationButton.classList.add('hidden');
+          return null;
+        });
+    }
+    return notificationSetupPromise;
+  }
+
+  async function pushApi(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        'X-Session-Token': localStorage.getItem(SESSION_KEY) || '',
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
+      },
+    });
+    if (!response.ok) throw new Error(`push_api_${response.status}`);
+    return response.status === 204 ? null : response.json();
+  }
+
+  function urlBase64ToUint8Array(value) {
+    const padding = '='.repeat((4 - (value.length % 4)) % 4);
+    const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
+    return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+  }
+
+  async function syncNotificationSubscription() {
+    const registration = await ensureNotificationSetup();
+    if (!registration || !localStorage.getItem(SESSION_KEY)) return;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+    try {
+      await pushApi('/api/push/subscription', {
+        method: 'POST',
+        body: JSON.stringify(subscription.toJSON()),
+      });
+      setNotificationButton(true);
+    } catch {
+      showToast('通知設定をサーバーと同期できませんでした。');
+    }
+  }
+
+  async function enableNotifications() {
+    const registration = await ensureNotificationSetup();
+    if (!registration) throw new Error('unsupported');
+    const { publicKey } = await pushApi('/api/push/public-key');
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+    try {
+      await pushApi('/api/push/subscription', {
+        method: 'POST',
+        body: JSON.stringify(subscription.toJSON()),
+      });
+    } catch (error) {
+      await subscription.unsubscribe();
+      throw error;
+    }
+    setNotificationButton(true);
+    showToast('この端末の通知をオンにしました。');
+  }
+
+  async function disableNotifications(quiet = false) {
+    const registration = await ensureNotificationSetup();
+    const subscription = await registration?.pushManager.getSubscription();
+    if (!subscription) {
+      setNotificationButton(false);
+      return;
+    }
+    await pushApi('/api/push/subscription', {
+      method: 'DELETE',
+      body: JSON.stringify({ endpoint: subscription.endpoint }),
+    });
+    await subscription.unsubscribe();
+    setNotificationButton(false);
+    if (!quiet) showToast('この端末の通知をオフにしました。');
+  }
+
+  async function toggleNotifications() {
+    if (isIosDevice() && !isStandaloneApp()) {
+      showToast('iPhoneでは共有メニューから「ホーム画面に追加」して、そのアイコンから開いてください。');
+      return;
+    }
+    if (!supportsPushNotifications()) {
+      showToast('このブラウザはWeb Push通知に対応していません。');
+      return;
+    }
+    setNotificationButton(notificationButton.classList.contains('enabled'), true);
+    try {
+      if (Notification.permission === 'default') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          showToast('通知が許可されませんでした。端末の設定から変更できます。');
+          return;
+        }
+      }
+      if (Notification.permission !== 'granted') {
+        showToast('通知がブロックされています。端末の設定から許可してください。');
+        return;
+      }
+      const registration = await ensureNotificationSetup();
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) await disableNotifications();
+      else await enableNotifications();
+    } catch {
+      showToast('通知設定を変更できませんでした。もう一度お試しください。');
+    } finally {
+      const subscription = await serviceWorkerRegistration?.pushManager.getSubscription().catch(() => null);
+      setNotificationButton(Boolean(subscription));
+    }
   }
 
   function setAuthMode(mode) {
@@ -205,6 +383,7 @@
       showApp();
       setConnection(true);
       send('get_state');
+      void syncNotificationSubscription();
       return;
     }
     if (data.type === 'state') {
@@ -214,6 +393,7 @@
       threads = data.threads || [];
       messages = (data.messages || []).filter((message) => message.thread_root_id == null);
       renderAll();
+      handleNotificationLaunch();
       return;
     }
     if (data.type === 'rooms') {
@@ -258,6 +438,7 @@
       renderMessages(true);
       updateRoomHeader();
       closeNav();
+      handleNotificationLaunch();
       return;
     }
     if (data.type === 'message') {
@@ -1069,7 +1250,12 @@
       threadReplyForm.requestSubmit();
     }
   });
-  $('logout-button').addEventListener('click', () => { send('logout'); localStorage.removeItem(SESSION_KEY); });
+  notificationButton.addEventListener('click', () => { void toggleNotifications(); });
+  $('logout-button').addEventListener('click', async () => {
+    try { await disableNotifications(true); } catch { /* ログアウト自体は続ける */ }
+    send('logout');
+    localStorage.removeItem(SESSION_KEY);
+  });
   $('profile-button').addEventListener('click', () => openProfile(me, true));
   $('profile-avatar-button').addEventListener('click', () => profileAvatarInput.click());
   profileAvatarInput.addEventListener('change', () => uploadProfileAvatar(profileAvatarInput.files?.[0]));
@@ -1175,6 +1361,7 @@
 
   composerInputShell.classList.add('highlight-enabled');
   renderComposerHighlight();
+  void ensureNotificationSetup();
   setAuthMode('login');
   connect();
 })();
