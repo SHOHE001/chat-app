@@ -43,6 +43,7 @@
   const threadReplyInput = $('thread-reply-input');
   const createThreadDialog = $('create-thread-dialog');
   const createRoomDialog = $('create-room-dialog');
+  const logoutDialog = $('logout-dialog');
   const profileDialog = $('profile-dialog');
   const profileAvatarInput = $('profile-avatar-input');
   const editMessageDialog = $('edit-message-dialog');
@@ -154,10 +155,34 @@
     toastTimer = setTimeout(() => toast.classList.add('hidden'), 3200);
   }
 
-  function setConnection(online, text = online ? '接続済み' : '再接続中…') {
+  function setConnection(online, text = online ? '' : '再接続中…') {
     const el = $('connection-status');
     el.textContent = text;
+    el.classList.toggle('hidden', online);
     el.classList.toggle('online', online);
+  }
+
+  function closeCreateRoomDialog() {
+    $('create-room-form').reset();
+    $('room-create-error').textContent = '';
+    if (createRoomDialog.open) createRoomDialog.close();
+  }
+
+  function closeLogoutDialog() {
+    if (logoutDialog.open) logoutDialog.close();
+  }
+
+  async function confirmLogout() {
+    const button = $('logout-confirm');
+    button.disabled = true;
+    button.textContent = 'ログアウト中…';
+    try { await disableNotifications(true); } catch { /* ログアウト自体は続ける */ }
+    const sent = send('logout');
+    localStorage.removeItem(SESSION_KEY);
+    closeLogoutDialog();
+    button.disabled = false;
+    button.textContent = 'ログアウト';
+    if (!sent) showAuth();
   }
 
   function handleNotificationLaunch() {
@@ -653,6 +678,7 @@
     }
     if (data.type === 'logged_out') {
       localStorage.removeItem(SESSION_KEY);
+      closeLogoutDialog();
       showAuth();
       return;
     }
@@ -1522,11 +1548,10 @@
     clearInterval(registrationQrTimer);
     registrationQrTimer = null;
   });
-  $('logout-button').addEventListener('click', async () => {
-    try { await disableNotifications(true); } catch { /* ログアウト自体は続ける */ }
-    send('logout');
-    localStorage.removeItem(SESSION_KEY);
-  });
+  $('logout-button').addEventListener('click', () => logoutDialog.showModal());
+  $('logout-close').addEventListener('click', closeLogoutDialog);
+  $('logout-cancel').addEventListener('click', closeLogoutDialog);
+  $('logout-confirm').addEventListener('click', () => { void confirmLogout(); });
   $('profile-button').addEventListener('click', () => openProfile(me, true));
   $('profile-avatar-button').addEventListener('click', () => profileAvatarInput.click());
   profileAvatarInput.addEventListener('change', () => uploadProfileAvatar(profileAvatarInput.files?.[0]));
@@ -1583,17 +1608,17 @@
     $('create-thread-form').reset();
   });
   $('add-room-button').addEventListener('click', () => { $('room-create-error').textContent = ''; createRoomDialog.showModal(); });
+  $('room-create-close').addEventListener('click', closeCreateRoomDialog);
+  $('room-create-cancel').addEventListener('click', closeCreateRoomDialog);
+  createRoomDialog.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    closeCreateRoomDialog();
+  });
   $('create-room-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    if (event.submitter?.value === 'cancel') {
-      createRoomDialog.close();
-      return;
-    }
     const name = $('room-name-input').value.trim();
     if (!name) return;
-    send('create_room', { name });
-    $('create-room-form').reset();
-    createRoomDialog.close();
+    if (send('create_room', { name })) closeCreateRoomDialog();
   });
   $('edit-message-form').addEventListener('submit', (event) => {
     event.preventDefault();
