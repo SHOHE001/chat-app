@@ -8,6 +8,7 @@ Type=oneshot
 WorkingDirectory=__INSTALL_DIR__
 EnvironmentFile=-__INSTALL_DIR__/.env
 Environment=HOME=__CLAUDE_HOME__
+Environment=PATH=__CLAUDE_HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=__NODE_BIN__ src/moderation-worker.js
 NoNewPrivileges=true
 PrivateTmp=true
