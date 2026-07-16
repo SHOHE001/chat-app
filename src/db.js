@@ -1177,6 +1177,32 @@ export function clearPostingBlock(db, userId, reason = '管理者が解除', now
   }
 }
 
+export function hideMessageAsModerator(
+  db,
+  { targetKind, messageId, roomId, threadId = null, moderatorUserId, reason = '管理者が非表示' },
+  now = Date.now(),
+) {
+  const table = targetKind === 'thread' ? 'standalone_thread_messages' : 'messages';
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const info = db.prepare(
+      `UPDATE ${table} SET hidden_at = ?, hidden_reason = ? WHERE id = ? AND hidden_at IS NULL`,
+    ).run(now, reason, messageId);
+    if (info.changes) {
+      db.prepare(`
+        INSERT INTO moderation_events (
+          action, target_kind, target_message_id, room_id, thread_id, user_id, reason, created_at
+        ) VALUES ('message_hidden_manual', ?, ?, ?, ?, ?, ?, ?)
+      `).run(targetKind, messageId, roomId, threadId, moderatorUserId, reason, now);
+    }
+    db.exec('COMMIT');
+    return info.changes > 0;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 export function setAccountProfile(db, userId, displayName, bio, avatarAttachmentId) {
   const info = db
     .prepare(

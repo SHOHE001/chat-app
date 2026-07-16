@@ -36,6 +36,7 @@ import {
   setAccountBan,
   clearAccountBan,
   clearPostingBlock,
+  hideMessageAsModerator,
   setAccountProfile,
   createSession,
   getAccountBySession,
@@ -1198,7 +1199,11 @@ export function createChatServer({
         return;
       }
 
-      if (parsed.type === 'edit_message' || parsed.type === 'delete_message') {
+      if (
+        parsed.type === 'edit_message' ||
+        parsed.type === 'delete_message' ||
+        parsed.type === 'hide_message'
+      ) {
         if (!ws.user) {
           sendError(ws, 'not_authenticated');
           return;
@@ -1209,7 +1214,7 @@ export function createChatServer({
           sendError(ws, 'message_not_found');
           return;
         }
-        if (!canModifyMessage(ws, message)) {
+        if (parsed.type === 'hide_message' ? !canManageRooms(ws) : !canModifyMessage(ws, message)) {
           sendError(ws, 'forbidden');
           return;
         }
@@ -1226,9 +1231,18 @@ export function createChatServer({
             body,
             editedAt,
           });
-        } else {
+        } else if (parsed.type === 'delete_message') {
           deleteMessage(db, message.id, ws.roomId);
           broadcastToRoom(ws.roomId, { type: 'message_deleted', messageId: message.id });
+        } else {
+          hideMessageAsModerator(db, {
+            targetKind: 'message',
+            messageId: message.id,
+            roomId: ws.roomId,
+            moderatorUserId: ws.user.id,
+            reason: `@${ws.user.username} が手動で非表示`,
+          });
+          broadcastToRoom(ws.roomId, { type: 'message_hidden', messageId: message.id });
         }
         return;
       }
@@ -1615,7 +1629,8 @@ export function createChatServer({
 
       if (
         parsed.type === 'edit_thread_message' ||
-        parsed.type === 'delete_thread_message'
+        parsed.type === 'delete_thread_message' ||
+        parsed.type === 'hide_thread_message'
       ) {
         if (!ws.user) {
           sendError(ws, 'not_authenticated');
@@ -1635,7 +1650,11 @@ export function createChatServer({
           sendError(ws, 'message_not_found');
           return;
         }
-        if (!canModifyMessage(ws, message)) {
+        if (
+          parsed.type === 'hide_thread_message'
+            ? !canManageRooms(ws)
+            : !canModifyMessage(ws, message)
+        ) {
           sendError(ws, 'forbidden');
           return;
         }
@@ -1653,10 +1672,25 @@ export function createChatServer({
             body,
             editedAt,
           });
-        } else {
+        } else if (parsed.type === 'delete_thread_message') {
           deleteStandaloneThreadMessage(db, message.id, thread.id);
           broadcastToRoom(ws.roomId, {
             type: 'thread_message_deleted',
+            threadId: thread.id,
+            messageId: message.id,
+          });
+          broadcastThreads(ws.roomId);
+        } else {
+          hideMessageAsModerator(db, {
+            targetKind: 'thread',
+            messageId: message.id,
+            roomId: ws.roomId,
+            threadId: thread.id,
+            moderatorUserId: ws.user.id,
+            reason: `@${ws.user.username} が手動で非表示`,
+          });
+          broadcastToRoom(ws.roomId, {
+            type: 'thread_message_hidden',
             threadId: thread.id,
             messageId: message.id,
           });

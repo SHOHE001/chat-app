@@ -134,9 +134,9 @@
 
   <dialog id="delete-message-dialog" class="delete-message-dialog">
     <form id="delete-message-form" method="dialog" class="dialog-form">
-      <header><div><h2>メッセージを削除</h2><p>この操作は取り消せません。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <header><div><h2 id="delete-message-title">メッセージを削除</h2><p id="delete-message-description">この操作は取り消せません。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
       <blockquote id="delete-message-preview" class="delete-message-preview"></blockquote>
-      <footer><button value="cancel" class="secondary-button">キャンセル</button><button value="delete" class="danger-button">削除する</button></footer>
+      <footer><button value="cancel" class="secondary-button">キャンセル</button><button id="delete-message-submit" value="confirm" class="danger-button">削除する</button></footer>
     </form>
   </dialog>
 

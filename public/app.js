@@ -1031,6 +1031,15 @@
       row.classList.remove('reaction-open', 'message-menu-open');
       openEditMessage(message, kind);
     });
+    const hide = document.createElement('button');
+    hide.className = 'message-manage-action';
+    hide.type = 'button';
+    hide.textContent = '非表示';
+    hide.title = 'メッセージを非表示';
+    hide.addEventListener('click', () => {
+      row.classList.remove('reaction-open', 'message-menu-open');
+      openHideMessage(message, kind);
+    });
     const remove = document.createElement('button');
     remove.className = 'message-manage-action danger';
     remove.type = 'button';
@@ -1040,7 +1049,9 @@
       row.classList.remove('reaction-open', 'message-menu-open');
       openDeleteMessage(message, kind);
     });
-    fragment.append(divider, edit, remove);
+    fragment.append(divider);
+    if (['owner', 'admin'].includes(me?.role)) fragment.append(hide);
+    fragment.append(edit, remove);
     return fragment;
   }
 
@@ -1062,12 +1073,31 @@
 
   function openDeleteMessage(message, kind) {
     deletingTarget = {
+      action: 'delete',
       kind,
       messageId: message.id,
       threadId: kind === 'thread' ? openThread?.id : null,
     };
     const preview = message.body?.trim() || (message.attachment ? `添付: ${message.attachment.name}` : '本文なし');
     $('delete-message-preview').textContent = preview;
+    $('delete-message-title').textContent = 'メッセージを削除';
+    $('delete-message-description').textContent = 'この操作は取り消せません。';
+    $('delete-message-submit').textContent = '削除する';
+    deleteMessageDialog.showModal();
+  }
+
+  function openHideMessage(message, kind) {
+    deletingTarget = {
+      action: 'hide',
+      kind,
+      messageId: message.id,
+      threadId: kind === 'thread' ? openThread?.id : null,
+    };
+    const preview = message.body?.trim() || (message.attachment ? `添付: ${message.attachment.name}` : '本文なし');
+    $('delete-message-preview').textContent = preview;
+    $('delete-message-title').textContent = 'メッセージを非表示';
+    $('delete-message-description').textContent = '投稿はDBに保持されますが、通常の画面には表示されなくなります。';
+    $('delete-message-submit').textContent = '非表示にする';
     deleteMessageDialog.showModal();
   }
 
@@ -1863,12 +1893,14 @@
     }
     if (!deletingTarget) return;
     if (deletingTarget.kind === 'thread') {
-      send('delete_thread_message', {
+      send(deletingTarget.action === 'hide' ? 'hide_thread_message' : 'delete_thread_message', {
         threadId: deletingTarget.threadId,
         messageId: deletingTarget.messageId,
       });
     } else {
-      send('delete_message', { messageId: deletingTarget.messageId });
+      send(deletingTarget.action === 'hide' ? 'hide_message' : 'delete_message', {
+        messageId: deletingTarget.messageId,
+      });
     }
     deletingTarget = null;
     deleteMessageDialog.close();
