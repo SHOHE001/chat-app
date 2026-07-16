@@ -1,11 +1,8 @@
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { openDb } from './db.js';
 import { runModerationCycle } from './moderation.js';
-
-const execFileAsync = promisify(execFile);
 
 function positiveNumber(name, fallback) {
   const raw = process.env[name];
@@ -23,14 +20,50 @@ export function createClaudeInvoker({
 } = {}) {
   return async (model, schema, prompt) => {
     const budget = model === 'haiku' ? haikuBudget : opusBudget;
-    const { stdout } = await execFileAsync(claudeBin, [
+    const args = [
       '-p', '--model', model, '--safe-mode', '--tools', '',
       '--no-session-persistence', '--max-budget-usd', String(budget),
-      '--output-format', 'json', '--json-schema', JSON.stringify(schema), prompt,
-    ], {
-      timeout: timeoutMs,
-      maxBuffer: 2 * 1024 * 1024,
-      env: { ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+      '--output-format', 'json', '--json-schema', JSON.stringify(schema),
+    ];
+    const stdout = await new Promise((resolve, reject) => {
+      const child = spawn(claudeBin, args, {
+        env: { ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const chunks = [];
+      let size = 0;
+      let settled = false;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        finish(new Error(`${model} moderation timed out`));
+      }, timeoutMs);
+      child.stdout.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 2 * 1024 * 1024) {
+          child.kill('SIGKILL');
+          finish(new Error(`${model} moderation output exceeded the limit`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      child.stderr.resume();
+      child.on('error', () => finish(new Error(`could not start ${model} moderation`)));
+      child.on('close', (code) => {
+        if (code !== 0) {
+          finish(new Error(`${model} moderation failed with exit code ${code}`));
+          return;
+        }
+        finish(null, Buffer.concat(chunks).toString('utf8'));
+      });
+      child.stdin.on('error', () => {});
+      child.stdin.end(prompt);
     });
     const envelope = JSON.parse(stdout);
     const result = envelope.structured_output ??
