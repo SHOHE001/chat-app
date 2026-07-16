@@ -740,3 +740,72 @@ test('P12 restricted rooms: 指定ロールだけに表示・入室を許可し�
     await stopServer(ctx);
   }
 });
+
+test('P13 room notifications: アカウントごとにオンオフし、再ログイン後も設定を維持する', async () => {
+  const ctx = await startServer();
+  try {
+    const owner = createClient(ctx.url);
+    const member = createClient(ctx.url);
+    await Promise.all([owner.open(), member.open()]);
+    const ownerAuth = await register(owner, 'notification-owner');
+    await register(
+      member,
+      'notification-member',
+      'password-123',
+      await issueInvite(ctx, ownerAuth.sessionToken),
+    );
+    const memberMirror = createClient(ctx.url);
+    await memberMirror.open();
+    const mirrorAuth = memberMirror.next('auth_ok');
+    memberMirror.send('login', { username: 'notification-member', password: 'password-123' });
+    await mirrorAuth;
+
+    const memberState = member.next('state');
+    member.send('get_state');
+    const defaultRoom = (await memberState).rooms[0];
+    assert.equal(defaultRoom.notificationsEnabled, true);
+
+    const mutedRooms = member.next('rooms');
+    const mirroredMutedRooms = memberMirror.next('rooms');
+    member.send('set_room_notification', { roomId: defaultRoom.id, enabled: false });
+    assert.equal(
+      (await mutedRooms).rooms.find((room) => room.id === defaultRoom.id).notificationsEnabled,
+      false,
+    );
+    assert.equal(
+      (await mirroredMutedRooms).rooms.find((room) => room.id === defaultRoom.id)
+        .notificationsEnabled,
+      false,
+    );
+
+    const ownerState = owner.next('state');
+    owner.send('get_state');
+    assert.equal(
+      (await ownerState).rooms.find((room) => room.id === defaultRoom.id).notificationsEnabled,
+      true,
+    );
+
+    const invalid = member.next('error');
+    member.send('set_room_notification', { roomId: defaultRoom.id, enabled: 'no' });
+    assert.equal((await invalid).reason, 'bad_room_notification');
+
+    member.close();
+    memberMirror.close();
+    const relogin = createClient(ctx.url);
+    await relogin.open();
+    const auth = relogin.next('auth_ok');
+    relogin.send('login', { username: 'notification-member', password: 'password-123' });
+    await auth;
+    const restoredState = relogin.next('state');
+    relogin.send('get_state');
+    assert.equal(
+      (await restoredState).rooms.find((room) => room.id === defaultRoom.id).notificationsEnabled,
+      false,
+    );
+
+    owner.close();
+    relogin.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});

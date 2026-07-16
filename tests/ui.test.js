@@ -167,6 +167,15 @@ test('UI15 restricted rooms: 作成時に一般ロールを選択し限定チャ
   assert.match(css, /\.room-access-grid/);
 });
 
+test('UI16 room notifications: チャンネルごとのベルで通知をオンオフできる', () => {
+  assert.match(app, /room-notification-toggle/);
+  assert.match(app, /room\.notificationsEnabled === false \? '🔕' : '🔔'/);
+  assert.match(app, /send\('set_room_notification'/);
+  assert.match(app, /enabled: room\.notificationsEnabled === false/);
+  assert.match(css, /\.room-notification-toggle\.muted/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*\.room-notification-toggle \{ width: 44px; height: 44px;/);
+});
+
 test('UI14 display roles: 大人・子供・スタッフを一般ロールとして選択・表示する', () => {
   for (const [role, label] of [['adult', '大人'], ['child', '子供'], ['staff', 'スタッフ']]) {
     assert.match(app, new RegExp(`${role}: '${label}'`));

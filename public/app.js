@@ -748,6 +748,7 @@
     room_exists: '同じ名前のチャンネルがあります。',
     bad_room_name: 'チャンネル名を確認してください。',
     bad_room_access: '入室できるロールの指定を確認してください。',
+    bad_room_notification: 'チャンネル通知の設定を変更できませんでした。',
     bad_thread_title: 'スレッドタイトルを1〜80文字で入力してください。',
     too_large: '送信内容が大きすぎます。',
     bad_attachment: '添付ファイルを利用できません。もう一度選択してください。',
@@ -830,6 +831,23 @@
       }
       button.addEventListener('click', () => send('switch_room', { roomId: room.id }));
       item.append(button);
+      const notificationToggle = document.createElement('button');
+      notificationToggle.className = `room-notification-toggle${room.notificationsEnabled === false ? ' muted' : ''}`;
+      notificationToggle.type = 'button';
+      notificationToggle.textContent = room.notificationsEnabled === false ? '🔕' : '🔔';
+      notificationToggle.title = room.notificationsEnabled === false
+        ? 'このチャンネルの通知をオンにする'
+        : 'このチャンネルの通知をオフにする';
+      notificationToggle.setAttribute('aria-label', notificationToggle.title);
+      notificationToggle.setAttribute('aria-pressed', String(room.notificationsEnabled !== false));
+      notificationToggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        send('set_room_notification', {
+          roomId: room.id,
+          enabled: room.notificationsEnabled === false,
+        });
+      });
+      item.append(notificationToggle);
       if (canManage && room.id !== rooms[0]?.id) {
         const remove = document.createElement('button');
         remove.className = 'nav-delete';

@@ -61,6 +61,8 @@ import {
   deletePushSubscriptionByEndpoint,
   deletePushSubscriptionsForUser,
   listPushSubscriptions,
+  listMutedRoomIds,
+  setRoomNotificationEnabled,
   latestModerationEventId,
   listModerationEventsAfter,
 } from './db.js';
@@ -464,12 +466,14 @@ export function createChatServer({
   }
 
   function roomsPayload(user) {
+    const mutedRoomIds = new Set(user ? listMutedRoomIds(db, user.id) : []);
     return listRooms(db)
       .filter((room) => canAccessRoom(user, room))
       .map((room) => ({
         id: room.id,
         name: room.name,
         allowedRoles: room.allowed_roles,
+        notificationsEnabled: !mutedRoomIds.has(room.id),
       }));
   }
 
@@ -890,8 +894,11 @@ export function createChatServer({
         url,
       });
       const room = getRoomById(db, roomId);
-      const subscriptions = listPushSubscriptions(db, excludeUserId)
-        .filter((subscription) => canAccessRoom(subscription, room));
+      const subscriptions = listPushSubscriptions(db, excludeUserId, roomId)
+        .filter(
+          (subscription) =>
+            subscription.notifications_enabled && canAccessRoom(subscription, room),
+        );
       await Promise.allSettled(
         subscriptions.map(async (subscription) => {
           try {
@@ -926,6 +933,14 @@ export function createChatServer({
   function broadcastRooms() {
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
+        sendJson(client, { type: 'rooms', rooms: roomsPayload(client.user) });
+      }
+    }
+  }
+
+  function broadcastRoomsForUser(userId) {
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN && client.user?.id === userId) {
         sendJson(client, { type: 'rooms', rooms: roomsPayload(client.user) });
       }
     }
@@ -1520,6 +1535,26 @@ export function createChatServer({
           return;
         }
         broadcastRooms();
+        return;
+      }
+
+      if (parsed.type === 'set_room_notification') {
+        if (!ws.user) {
+          sendError(ws, 'not_authenticated');
+          return;
+        }
+        const targetRoomId = parseRoomId(parsed.roomId);
+        const targetRoom = targetRoomId ? getRoomById(db, targetRoomId) : undefined;
+        if (!targetRoom || !canAccessRoom(ws.user, targetRoom)) {
+          sendError(ws, 'room_not_found');
+          return;
+        }
+        if (typeof parsed.enabled !== 'boolean') {
+          sendError(ws, 'bad_room_notification');
+          return;
+        }
+        setRoomNotificationEnabled(db, ws.user.id, targetRoomId, parsed.enabled);
+        broadcastRoomsForUser(ws.user.id);
         return;
       }
 

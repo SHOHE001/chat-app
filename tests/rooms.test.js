@@ -174,8 +174,12 @@ test('T14_create_room 管理者のcreate_roomで全クライアントにroomsが
     assert.equal(adminClient.history.type, 'history');
     assert.equal(adminClient.rooms.type, 'rooms');
     for (const room of adminClient.rooms.rooms) {
-      assert.deepEqual(Object.keys(room).sort(), ['allowedRoles', 'id', 'name']);
+      assert.deepEqual(
+        Object.keys(room).sort(),
+        ['allowedRoles', 'id', 'name', 'notificationsEnabled'],
+      );
       assert.deepEqual(room.allowedRoles, []);
+      assert.equal(room.notificationsEnabled, true);
     }
 
     const authRes = await authAdmin(adminClient);
@@ -196,8 +200,12 @@ test('T14_create_room 管理者のcreate_roomで全クライアントにroomsが
     assert.ok(adminRooms.rooms.some((r) => r.name === 'あたらしいへや'));
     assert.ok(otherRooms.rooms.some((r) => r.name === 'あたらしいへや'));
     for (const room of adminRooms.rooms) {
-      assert.deepEqual(Object.keys(room).sort(), ['allowedRoles', 'id', 'name']);
+      assert.deepEqual(
+        Object.keys(room).sort(),
+        ['allowedRoles', 'id', 'name', 'notificationsEnabled'],
+      );
       assert.deepEqual(room.allowedRoles, []);
+      assert.equal(room.notificationsEnabled, true);
     }
 
     adminClient.ws.close();

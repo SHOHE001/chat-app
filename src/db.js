@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS muted_rooms (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, room_id)
+);
 CREATE TABLE IF NOT EXISTS message_reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   reporter_user_id INTEGER NOT NULL REFERENCES users(id),
@@ -162,11 +168,11 @@ export function openDb(path) {
   // 3=アカウント/リアクション/独立スレッド、4=添付ファイル、5=プロフィール、
   // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN、
   // 9=通報スナップショットとAI審査状態、10=AI巡回・非表示・投稿停止、
-  // 11=ロール限定チャンネル。
+  // 11=ロール限定チャンネル、12=ユーザー別チャンネル通知設定。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 11');
-    userVersion = 11;
+    db.exec('PRAGMA user_version = 12');
+    userVersion = 12;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -434,6 +440,26 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 11) {
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS muted_rooms (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (user_id, room_id)
+        );
+      `);
+      db.exec('PRAGMA user_version = 12');
+      db.exec('COMMIT');
+      userVersion = 12;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_author_user ON messages(author_user_id)');
@@ -447,6 +473,7 @@ export function openDb(path) {
     'CREATE INDEX IF NOT EXISTS idx_standalone_thread_messages_thread ON standalone_thread_messages(thread_id)',
   );
   db.exec('CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_muted_rooms_room ON muted_rooms(room_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_banned_until ON users(banned_until)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_created ON message_reports(created_at DESC)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_status ON message_reports(status, ai_status)');
@@ -1459,25 +1486,46 @@ export function deletePushSubscriptionsForUser(db, userId) {
   return Number(db.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(userId).changes);
 }
 
-export function listPushSubscriptions(db, excludeUserId = null) {
+export function listPushSubscriptions(db, excludeUserId = null, roomId = null) {
   const rows = excludeUserId === null
     ? db.prepare(`
-        SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role
+        SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role, mr.room_id AS muted_room_id
         FROM push_subscriptions p JOIN users u ON u.id = p.user_id
-      `).all()
+        LEFT JOIN muted_rooms mr ON mr.user_id = p.user_id AND mr.room_id = ?
+      `).all(roomId)
     : db
       .prepare(
-        `SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role
+        `SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role, mr.room_id AS muted_room_id
          FROM push_subscriptions p JOIN users u ON u.id = p.user_id
+         LEFT JOIN muted_rooms mr ON mr.user_id = p.user_id AND mr.room_id = ?
          WHERE p.user_id != ?`,
       )
-      .all(excludeUserId);
+      .all(roomId, excludeUserId);
   return rows.map((row) => ({
     user_id: Number(row.user_id),
     role: row.role,
+    notifications_enabled: row.muted_room_id === null,
     endpoint: row.endpoint,
     keys: { p256dh: row.p256dh, auth: row.auth },
   }));
+}
+
+export function listMutedRoomIds(db, userId) {
+  return db
+    .prepare('SELECT room_id FROM muted_rooms WHERE user_id = ? ORDER BY room_id')
+    .all(userId)
+    .map((row) => Number(row.room_id));
+}
+
+export function setRoomNotificationEnabled(db, userId, roomId, enabled) {
+  if (enabled) {
+    db.prepare('DELETE FROM muted_rooms WHERE user_id = ? AND room_id = ?').run(userId, roomId);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO muted_rooms (user_id, room_id, created_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id, room_id) DO NOTHING`,
+  ).run(userId, roomId, Date.now());
 }
 
 export function getStandaloneThreadMessage(db, messageId, threadId) {

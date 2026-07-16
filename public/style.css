@@ -70,6 +70,9 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .nav-select .channel-icon { margin-right: 7px; color: #80848e; font-size: 19px; vertical-align: -1px; }
 .nav-delete { visibility: hidden; margin-right: 3px; border: 0; color: var(--faint); background: transparent; cursor: pointer; }
 .nav-item:hover .nav-delete { visibility: visible; }
+.room-notification-toggle { width: 38px; height: 34px; flex: 0 0 38px; padding: 0; border: 0; border-radius: 4px; color: var(--muted); background: transparent; font-size: 14px; cursor: pointer; }
+.room-notification-toggle:hover { background: rgba(255,255,255,.08); }
+.room-notification-toggle.muted { opacity: .55; filter: grayscale(1); }
 .thread-list .nav-item { align-items: flex-start; }
 .thread-list .nav-select { display: grid; grid-template-columns: 18px 1fr; gap: 6px; }
 .thread-copy { min-width: 0; }
@@ -270,6 +273,7 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
   .nav.open { translate: 0; }
   .chat-column { height: 100%; }
   .mobile-button { display: block; }
+  .room-notification-toggle { width: 44px; height: 44px; flex-basis: 44px; }
   .topbar { padding-right: max(10px, env(safe-area-inset-right, 0px)); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
   .message { grid-template-columns: 48px minmax(0, 1fr); padding-right: 10px; padding-left: 10px; }
   .message:hover .message-actions, .message:focus-within .message-actions { display: none; }
