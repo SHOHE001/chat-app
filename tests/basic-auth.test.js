@@ -272,7 +272,10 @@ test('B25 Safari fallback: Basicを維持したままフォームでSecure Cooki
     const login = await fetch(ctx.httpUrl + '/basic-login', {
       method: 'POST',
       redirect: 'manual',
-      body: new URLSearchParams({ user: 'shared', password: 'secret-password' }),
+      body: new URLSearchParams({
+        user: ' shared ',
+        password: '  secret-password  ',
+      }),
     });
     assert.equal(login.status, 303);
     assert.equal(login.headers.get('location'), '/');

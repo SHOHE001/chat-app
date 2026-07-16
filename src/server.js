@@ -832,8 +832,8 @@ export function createChatServer({
     }
     const users = form.getAll('user');
     const passwords = form.getAll('password');
-    const user = users.length === 1 ? users[0] : '';
-    const password = passwords.length === 1 ? passwords[0] : '';
+    const user = users.length === 1 ? users[0].trim() : '';
+    const password = passwords.length === 1 ? passwords[0].trim() : '';
     const userOk = safeStringEqual(user, basicAuth.user);
     const passwordOk = safeStringEqual(password, basicAuth.password);
     if (!userOk || !passwordOk) {
