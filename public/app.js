@@ -113,8 +113,12 @@
     if (viewportSyncFrame !== null) cancelAnimationFrame(viewportSyncFrame);
     viewportSyncFrame = requestAnimationFrame(() => {
       viewportSyncFrame = null;
-      const height = window.visualViewport?.height || window.innerHeight;
+      const viewport = window.visualViewport;
+      const height = viewport?.height || window.innerHeight;
+      const offsetTop = viewport?.offsetTop || 0;
       if (height > 0) document.documentElement.style.setProperty('--app-height', `${Math.round(height)}px`);
+      document.documentElement.style.setProperty('--app-top', `${Math.max(0, Math.round(offsetTop))}px`);
+      document.documentElement.classList.toggle('keyboard-open', Boolean(viewport && window.innerHeight - height > 120));
     });
   }
 
@@ -1056,6 +1060,31 @@
 
   function makeManageActions(message, kind, row) {
     const fragment = document.createDocumentFragment();
+    const copy = document.createElement('button');
+    copy.className = 'message-manage-action';
+    copy.type = 'button';
+    copy.textContent = 'コピー';
+    copy.title = 'メッセージ本文をコピー';
+    copy.addEventListener('click', async () => {
+      row.classList.remove('reaction-open', 'message-menu-open');
+      const text = message.body?.trim() || message.attachment?.name || '';
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast('コピーしました。');
+      } catch {
+        const fallback = document.createElement('textarea');
+        fallback.value = text;
+        fallback.setAttribute('readonly', '');
+        fallback.style.position = 'fixed';
+        fallback.style.opacity = '0';
+        document.body.append(fallback);
+        fallback.select();
+        const copied = document.execCommand('copy');
+        fallback.remove();
+        showToast(copied ? 'コピーしました。' : 'コピーできませんでした。');
+      }
+    });
     const report = document.createElement('button');
     report.className = 'message-manage-action report';
     report.type = 'button';
@@ -1065,7 +1094,7 @@
       row.classList.remove('reaction-open', 'message-menu-open');
       openReportMessage(message, kind);
     });
-    fragment.append(report);
+    fragment.append(copy, report);
     if (!canModifyMessage(message)) return fragment;
     const divider = document.createElement('span');
     divider.className = 'message-action-divider';
@@ -1334,7 +1363,7 @@
     });
     row.addEventListener('pointerup', cancel);
     row.addEventListener('pointercancel', cancel);
-    row.addEventListener('contextmenu', (event) => event.preventDefault());
+    row.addEventListener('contextmenu', cancel);
   }
 
   function makeReactionChip(messageId, reaction) {
@@ -1979,6 +2008,7 @@
   window.addEventListener('orientationchange', syncAppViewportHeight);
   window.visualViewport?.addEventListener('resize', syncAppViewportHeight);
   void ensureNotificationSetup();
+  window.visualViewport?.addEventListener('scroll', syncAppViewportHeight);
   authSwitch.classList.toggle('hidden', !registrationInvite);
   void loadRegistrationPolicy();
   setAuthMode(registrationLaunch ? 'register' : 'login');
