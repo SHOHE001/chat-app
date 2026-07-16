@@ -179,7 +179,7 @@ test('T14_create_room 管理者のcreate_roomで全クライアントにroomsが
         ['allowedRoles', 'id', 'name', 'notificationsEnabled'],
       );
       assert.deepEqual(room.allowedRoles, []);
-      assert.equal(room.notificationsEnabled, true);
+      assert.equal(room.notificationsEnabled, false);
     }
 
     const authRes = await authAdmin(adminClient);
@@ -205,7 +205,7 @@ test('T14_create_room 管理者のcreate_roomで全クライアントにroomsが
         ['allowedRoles', 'id', 'name', 'notificationsEnabled'],
       );
       assert.deepEqual(room.allowedRoles, []);
-      assert.equal(room.notificationsEnabled, true);
+      assert.equal(room.notificationsEnabled, false);
     }
 
     adminClient.ws.close();

@@ -61,7 +61,7 @@ import {
   deletePushSubscriptionByEndpoint,
   deletePushSubscriptionsForUser,
   listPushSubscriptions,
-  listMutedRoomIds,
+  listNotificationEnabledRoomIds,
   setRoomNotificationEnabled,
   latestModerationEventId,
   listModerationEventsAfter,
@@ -466,14 +466,16 @@ export function createChatServer({
   }
 
   function roomsPayload(user) {
-    const mutedRoomIds = new Set(user ? listMutedRoomIds(db, user.id) : []);
+    const notificationEnabledRoomIds = new Set(
+      user ? listNotificationEnabledRoomIds(db, user.id) : [],
+    );
     return listRooms(db)
       .filter((room) => canAccessRoom(user, room))
       .map((room) => ({
         id: room.id,
         name: room.name,
         allowedRoles: room.allowed_roles,
-        notificationsEnabled: !mutedRoomIds.has(room.id),
+        notificationsEnabled: notificationEnabledRoomIds.has(room.id),
       }));
   }
 
