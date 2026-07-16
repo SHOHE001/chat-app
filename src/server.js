@@ -35,6 +35,7 @@ import {
   setAccountRole,
   setAccountBan,
   clearAccountBan,
+  clearPostingBlock,
   setAccountProfile,
   createSession,
   getAccountBySession,
@@ -59,6 +60,8 @@ import {
   deletePushSubscriptionByEndpoint,
   deletePushSubscriptionsForUser,
   listPushSubscriptions,
+  latestModerationEventId,
+  listModerationEventsAfter,
 } from './db.js';
 
 const MIN_NODE_VERSION = '22.22.3';
@@ -295,7 +298,7 @@ function resolveThreadRoot(db, roomId, value) {
   const rootId = parseRoomId(value);
   if (rootId === null) return null;
   const root = getMessageById(db, rootId);
-  if (!root) return null;
+  if (!root || root.hidden_at) return null;
   if (root.room_id !== roomId) return null;
   if (root.thread_root_id !== null) return null;
   return root;
@@ -820,6 +823,7 @@ export function createChatServer({
   }
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
+  let moderationEventCursor = latestModerationEventId(db);
 
   server.on('upgrade', (req, socket, head) => {
     const onSocketError = () => socket.destroy();
@@ -978,6 +982,10 @@ export function createChatServer({
 
   function isAccountBanned(user, now = Date.now()) {
     return user?.banned_until === -1 || Number(user?.banned_until) > now;
+  }
+
+  function postingIsBlocked(user) {
+    return Boolean(user?.posting_blocked_at);
   }
 
   function canModifyMessage(ws, message) {
@@ -1141,6 +1149,10 @@ export function createChatServer({
           sendError(ws, 'not_joined');
           return;
         }
+        if (postingIsBlocked(ws.user)) {
+          sendError(ws, 'posting_blocked', { blockReason: ws.user.posting_blocked_reason });
+          return;
+        }
         const body = sanitizeBody(parsed.body) || '';
         let attachmentId = null;
         if (parsed.attachmentId !== undefined && parsed.attachmentId !== null) {
@@ -1193,7 +1205,7 @@ export function createChatServer({
         }
         const messageId = parseRoomId(parsed.messageId);
         const message = messageId ? getMessageById(db, messageId) : undefined;
-        if (!message || message.room_id !== ws.roomId || message.thread_root_id !== null) {
+        if (!message || message.hidden_at || message.room_id !== ws.roomId || message.thread_root_id !== null) {
           sendError(ws, 'message_not_found');
           return;
         }
@@ -1242,7 +1254,7 @@ export function createChatServer({
         let attachment = null;
         if (targetKind === 'message') {
           message = getMessageById(db, messageId);
-          if (!message || message.room_id !== ws.roomId || message.thread_root_id !== null) {
+          if (!message || message.hidden_at || message.room_id !== ws.roomId || message.thread_root_id !== null) {
             sendError(ws, 'message_not_found');
             return;
           }
@@ -1366,6 +1378,22 @@ export function createChatServer({
           client.sessionTokenHash = null;
           client.close(4003, 'account banned');
         }
+        broadcastUsers();
+        return;
+      }
+
+      if (parsed.type === 'unblock_posting') {
+        if (!canManageRooms(ws)) {
+          sendError(ws, 'forbidden');
+          return;
+        }
+        const userId = parseRoomId(parsed.userId);
+        const target = userId ? getAccountById(db, userId) : undefined;
+        if (!target) {
+          sendError(ws, 'user_not_found');
+          return;
+        }
+        clearPostingBlock(db, target.id, `@${ws.user.username} が解除`);
         broadcastUsers();
         return;
       }
@@ -1513,6 +1541,10 @@ export function createChatServer({
           sendError(ws, 'not_authenticated');
           return;
         }
+        if (postingIsBlocked(ws.user)) {
+          sendError(ws, 'posting_blocked', { blockReason: ws.user.posting_blocked_reason });
+          return;
+        }
         const title = validateThreadTitle(parsed.title);
         const body = parsed.body ? sanitizeBody(parsed.body) : null;
         if (!title) {
@@ -1556,6 +1588,10 @@ export function createChatServer({
           sendError(ws, 'not_authenticated');
           return;
         }
+        if (postingIsBlocked(ws.user)) {
+          sendError(ws, 'posting_blocked', { blockReason: ws.user.posting_blocked_reason });
+          return;
+        }
         const threadId = parseRoomId(parsed.threadId);
         const thread = threadId ? getStandaloneThread(db, threadId, ws.roomId) : undefined;
         const body = sanitizeBody(parsed.body);
@@ -1595,7 +1631,7 @@ export function createChatServer({
         const message = messageId
           ? getStandaloneThreadMessage(db, messageId, thread.id)
           : undefined;
-        if (!message) {
+        if (!message || message.hidden_at) {
           sendError(ws, 'message_not_found');
           return;
         }
@@ -1653,7 +1689,30 @@ export function createChatServer({
     });
   });
 
+  const moderationEventTimer = setInterval(() => {
+    try {
+      for (const event of listModerationEventsAfter(db, moderationEventCursor)) {
+        moderationEventCursor = event.id;
+        if (event.action === 'message_hidden') {
+          const type = event.target_kind === 'thread' ? 'thread_message_hidden' : 'message_hidden';
+          broadcastToRoom(event.room_id, {
+            type,
+            messageId: event.target_message_id,
+            threadId: event.thread_id,
+          });
+          if (event.target_kind === 'thread') broadcastThreads(event.room_id);
+        } else if (event.action === 'posting_blocked' || event.action === 'posting_unblocked') {
+          broadcastUsers();
+        }
+      }
+    } catch (error) {
+      console.warn(`chat-app: moderation event poll failed (${error.code || 'unknown'})`);
+    }
+  }, 3000);
+  moderationEventTimer.unref();
+
   function close(callback) {
+    clearInterval(moderationEventTimer);
     for (const client of wss.clients) {
       client.terminate();
     }

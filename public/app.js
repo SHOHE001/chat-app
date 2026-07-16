@@ -501,6 +501,24 @@
     $('add-room-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
     $('registration-qr-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
     $('report-inbox-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
+    updatePostingState();
+  }
+
+  function updatePostingState() {
+    const blocked = Boolean(me?.posting_blocked_at);
+    const controls = [
+      messageInput, attachButton, messageForm.querySelector('.send-button'),
+      threadReplyInput, threadReplyForm.querySelector('.send-button'), $('add-thread-button'),
+    ];
+    for (const control of controls) if (control) control.disabled = blocked;
+    if (blocked) {
+      messageInput.placeholder = '投稿が停止されています（管理者が解除できます）';
+      threadReplyInput.placeholder = '投稿が停止されています';
+    } else {
+      const room = rooms.find((item) => item.id === currentRoomId);
+      messageInput.placeholder = `#${room?.name || ''} へメッセージ`;
+      threadReplyInput.placeholder = '返信する';
+    }
   }
 
   function connect() {
@@ -636,9 +654,10 @@
       }
       return;
     }
-    if (data.type === 'message_deleted') {
+    if (data.type === 'message_deleted' || data.type === 'message_hidden') {
       messages = messages.filter((item) => item.id !== data.messageId);
       renderMessages(false);
+      if (data.type === 'message_hidden') showToast('AI審査によりメッセージが非表示になりました。');
       return;
     }
     if (data.type === 'reaction_update') {
@@ -676,9 +695,13 @@
       }
       return;
     }
-    if (data.type === 'thread_message_deleted' && data.threadId === openThread?.id) {
+    if (
+      (data.type === 'thread_message_deleted' || data.type === 'thread_message_hidden') &&
+      data.threadId === openThread?.id
+    ) {
       openThreadMessages = openThreadMessages.filter((item) => item.id !== data.messageId);
       renderThreadPanel(false);
+      if (data.type === 'thread_message_hidden') showToast('AI審査により返信が非表示になりました。');
       return;
     }
     if (data.type === 'logged_out') {
@@ -731,6 +754,7 @@
     invite_expired: 'この招待QRコードは期限切れです。新しいQRコードを読み取ってください。',
     bad_report: '通報理由を選び、自由記述の場合は内容を入力してください。',
     already_reported: 'このメッセージはすでに通報済みです。',
+    posting_blocked: 'AI審査により新規投稿が停止されています。管理者またはオーナーへ解除を依頼してください。',
   };
 
   function formatBanMessage(bannedUntil) {
@@ -776,6 +800,7 @@
     const name = room?.name || '';
     $('room-name').textContent = name;
     messageInput.placeholder = `#${name} へメッセージ`;
+    updatePostingState();
   }
 
   function renderRooms() {
@@ -859,6 +884,12 @@
           : `${new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(user.banned_until))}までBAN`;
         copy.append(status);
       }
+      if (user.posting_blocked_at) {
+        const status = document.createElement('span');
+        status.className = 'ban-status';
+        status.textContent = '投稿停止中';
+        copy.append(status);
+      }
       item.append(copy);
       const actions = document.createElement('div');
       actions.className = 'member-moderation';
@@ -895,6 +926,19 @@
           banUserDialog.showModal();
         });
         actions.append(banButton);
+      }
+      if (['owner', 'admin'].includes(me?.role) && user.posting_blocked_at) {
+        const unblock = document.createElement('button');
+        unblock.type = 'button';
+        unblock.className = 'member-ban-button unban';
+        unblock.textContent = '投稿停止を解除';
+        unblock.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (confirm(`${accountName(user)} の投稿停止を解除しますか？`)) {
+            send('unblock_posting', { userId: user.id });
+          }
+        });
+        actions.append(unblock);
       }
       if (actions.childElementCount) item.append(actions);
       item.addEventListener('click', () => openProfile(user, false));
@@ -1606,6 +1650,10 @@
   });
   messageForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (me?.posting_blocked_at) {
+      showToast(errorMessages.posting_blocked);
+      return;
+    }
     const body = messageInput.value.trim();
     if (uploadRequest) {
       showToast('アップロード完了までお待ちください。');
@@ -1641,6 +1689,10 @@
   });
   threadReplyForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (me?.posting_blocked_at) {
+      showToast(errorMessages.posting_blocked);
+      return;
+    }
     const body = threadReplyInput.value.trim();
     if (!body || !openThread) return;
     send('thread_message', { threadId: openThread.id, body });
@@ -1744,7 +1796,14 @@
   }
   $('thread-close').addEventListener('click', closeThread);
   threadScrim.addEventListener('click', closeThread);
-  $('add-thread-button').addEventListener('click', () => { $('thread-create-error').textContent = ''; createThreadDialog.showModal(); });
+  $('add-thread-button').addEventListener('click', () => {
+    if (me?.posting_blocked_at) {
+      showToast(errorMessages.posting_blocked);
+      return;
+    }
+    $('thread-create-error').textContent = '';
+    createThreadDialog.showModal();
+  });
   $('create-thread-form').addEventListener('submit', (event) => {
     event.preventDefault();
     if (event.submitter?.value === 'cancel') {

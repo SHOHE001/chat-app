@@ -1,0 +1,11 @@
+[Unit]
+Description=Run chat-app AI moderation every 3 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=3h
+Persistent=true
+Unit=chat-app-moderation.service
+
+[Install]
+WantedBy=timers.target

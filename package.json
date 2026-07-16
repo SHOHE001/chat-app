@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
+    "moderate": "node --env-file-if-exists=.env src/moderation-worker.js",
     "test": "node --test"
   },
   "dependencies": {

@@ -1,0 +1,15 @@
+[Unit]
+Description=chat-app AI moderation patrol
+After=network-online.target chat-app.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__INSTALL_DIR__
+EnvironmentFile=-__INSTALL_DIR__/.env
+Environment=HOME=__CLAUDE_HOME__
+ExecStart=__NODE_BIN__ src/moderation-worker.js
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=__INSTALL_DIR__/data __CLAUDE_HOME__/.claude

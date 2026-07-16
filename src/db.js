@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS users (
   banned_until INTEGER,
   banned_at INTEGER,
   banned_by_user_id INTEGER REFERENCES users(id),
+  posting_blocked_at INTEGER,
+  posting_blocked_reason TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS rooms (
@@ -43,7 +45,9 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at INTEGER NOT NULL,
   edited_at INTEGER,
   thread_root_id INTEGER REFERENCES messages(id),
-  attachment_id TEXT REFERENCES attachments(id)
+  attachment_id TEXT REFERENCES attachments(id),
+  hidden_at INTEGER,
+  hidden_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
@@ -73,7 +77,9 @@ CREATE TABLE IF NOT EXISTS standalone_thread_messages (
   author TEXT NOT NULL,
   body TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  edited_at INTEGER
+  edited_at INTEGER,
+  hidden_at INTEGER,
+  hidden_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS app_config (
   key TEXT PRIMARY KEY,
@@ -108,6 +114,36 @@ CREATE TABLE IF NOT EXISTS message_reports (
   created_at INTEGER NOT NULL,
   UNIQUE (reporter_user_id, target_kind, target_message_id)
 );
+CREATE TABLE IF NOT EXISTS moderation_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  review_key TEXT UNIQUE NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('patrol', 'report')),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('message', 'thread')),
+  target_message_id INTEGER NOT NULL,
+  content_version INTEGER NOT NULL,
+  report_id INTEGER,
+  author_user_id INTEGER,
+  room_id INTEGER NOT NULL,
+  thread_id INTEGER,
+  category TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('keep', 'hide')),
+  rationale TEXT NOT NULL,
+  haiku_result TEXT,
+  opus_result TEXT,
+  completed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS moderation_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  target_kind TEXT,
+  target_message_id INTEGER,
+  room_id INTEGER,
+  thread_id INTEGER,
+  user_id INTEGER,
+  reason TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `;
 
 /**
@@ -124,11 +160,11 @@ export function openDb(path) {
   // user_version: 0=新規、1=旧メッセージ、2=メッセージスレッド、
   // 3=アカウント/リアクション/独立スレッド、4=添付ファイル、5=プロフィール、
   // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN、
-  // 9=通報スナップショットとAI審査状態。
+  // 9=通報スナップショットとAI審査状態、10=AI巡回・非表示・投稿停止。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 9');
-    userVersion = 9;
+    db.exec('PRAGMA user_version = 10');
+    userVersion = 10;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -315,6 +351,69 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 9) {
+    const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
+    const messageColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
+    const threadMessageColumns = new Set(
+      db.prepare('PRAGMA table_info(standalone_thread_messages)').all().map((column) => column.name),
+    );
+    db.exec('BEGIN');
+    try {
+      if (!userColumns.has('posting_blocked_at')) {
+        db.exec('ALTER TABLE users ADD COLUMN posting_blocked_at INTEGER');
+      }
+      if (!userColumns.has('posting_blocked_reason')) {
+        db.exec('ALTER TABLE users ADD COLUMN posting_blocked_reason TEXT');
+      }
+      if (!messageColumns.has('hidden_at')) db.exec('ALTER TABLE messages ADD COLUMN hidden_at INTEGER');
+      if (!messageColumns.has('hidden_reason')) db.exec('ALTER TABLE messages ADD COLUMN hidden_reason TEXT');
+      if (!threadMessageColumns.has('hidden_at')) {
+        db.exec('ALTER TABLE standalone_thread_messages ADD COLUMN hidden_at INTEGER');
+      }
+      if (!threadMessageColumns.has('hidden_reason')) {
+        db.exec('ALTER TABLE standalone_thread_messages ADD COLUMN hidden_reason TEXT');
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS moderation_reviews (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          review_key TEXT UNIQUE NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('patrol', 'report')),
+          target_kind TEXT NOT NULL CHECK (target_kind IN ('message', 'thread')),
+          target_message_id INTEGER NOT NULL,
+          content_version INTEGER NOT NULL,
+          report_id INTEGER,
+          author_user_id INTEGER,
+          room_id INTEGER NOT NULL,
+          thread_id INTEGER,
+          category TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('keep', 'hide')),
+          rationale TEXT NOT NULL,
+          haiku_result TEXT,
+          opus_result TEXT,
+          completed_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS moderation_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          action TEXT NOT NULL,
+          target_kind TEXT,
+          target_message_id INTEGER,
+          room_id INTEGER,
+          thread_id INTEGER,
+          user_id INTEGER,
+          reason TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+      `);
+      db.exec('PRAGMA user_version = 10');
+      db.exec('COMMIT');
+      userVersion = 10;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_author_user ON messages(author_user_id)');
@@ -331,6 +430,10 @@ export function openDb(path) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_banned_until ON users(banned_until)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_created ON message_reports(created_at DESC)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_status ON message_reports(status, ai_status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_moderation_reviews_target ON moderation_reviews(target_kind, target_message_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_moderation_reviews_author ON moderation_reviews(author_user_id, completed_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_moderation_events_id ON moderation_events(id)');
+  db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA foreign_keys = ON');
 
   // デフォルトルーム "全体" を投入（既存なら無視）。
@@ -468,7 +571,7 @@ export function getRecentMessages(db, roomId, limit = 50) {
                 MAX(r.created_at) AS thread_last_reply_at
          FROM messages m
          LEFT JOIN messages r ON r.thread_root_id = m.id AND r.room_id = m.room_id
-         WHERE m.room_id = ? AND m.thread_root_id IS NULL
+         WHERE m.room_id = ? AND m.thread_root_id IS NULL AND m.hidden_at IS NULL
          GROUP BY m.id
          ORDER BY m.id DESC
          LIMIT ?
@@ -508,7 +611,7 @@ export function getThreadMessages(db, rootId, roomId, limit = 50) {
       `SELECT * FROM (
          SELECT id, room_id, author, author_user_id, body, created_at, edited_at, thread_root_id
          FROM messages
-         WHERE thread_root_id = ? AND room_id = ?
+         WHERE thread_root_id = ? AND room_id = ? AND hidden_at IS NULL
          ORDER BY id DESC
          LIMIT ?
        )
@@ -537,7 +640,7 @@ export function getMessageById(db, messageId) {
   const row = db
     .prepare(
       `SELECT id, room_id, author, author_user_id, body, created_at, edited_at,
-              thread_root_id, attachment_id
+              thread_root_id, attachment_id, hidden_at, hidden_reason
        FROM messages WHERE id = ?`,
     )
     .get(messageId);
@@ -552,6 +655,8 @@ export function getMessageById(db, messageId) {
     edited_at: row.edited_at === null ? null : Number(row.edited_at),
     thread_root_id: row.thread_root_id === null ? null : Number(row.thread_root_id),
     attachment_id: row.attachment_id || null,
+    hidden_at: row.hidden_at === null ? null : Number(row.hidden_at),
+    hidden_reason: row.hidden_reason || null,
   };
 }
 
@@ -694,6 +799,164 @@ export function listMessageReports(db, limit = 100) {
     }));
 }
 
+export function listPendingReportsForAi(db, limit = 50) {
+  return listMessageReports(db, Math.max(limit, 100))
+    .filter((report) => report.ai_status === 'pending')
+    .slice(0, limit);
+}
+
+export function listPendingPatrolMessages(db, limit = 50) {
+  const rows = db.prepare(`
+    SELECT * FROM (
+      SELECT 'message' AS target_kind, m.id AS target_message_id, m.room_id,
+             NULL AS thread_id, m.author_user_id, m.author, m.body, m.created_at,
+             COALESCE(m.edited_at, m.created_at) AS content_version
+      FROM messages m
+      WHERE m.hidden_at IS NULL
+      UNION ALL
+      SELECT 'thread', m.id, t.room_id, m.thread_id, m.author_user_id, m.author,
+             m.body, m.created_at, COALESCE(m.edited_at, m.created_at)
+      FROM standalone_thread_messages m
+      JOIN standalone_threads t ON t.id = m.thread_id
+      WHERE m.hidden_at IS NULL
+    ) candidates
+    WHERE NOT EXISTS (
+      SELECT 1 FROM moderation_reviews r
+      WHERE r.review_key = 'patrol:' || candidates.target_kind || ':' ||
+        candidates.target_message_id || ':' || candidates.content_version
+    )
+    ORDER BY created_at ASC, target_kind ASC, target_message_id ASC
+    LIMIT ?
+  `).all(limit);
+  return rows.map((row) => ({
+    target_kind: row.target_kind,
+    target_message_id: Number(row.target_message_id),
+    room_id: Number(row.room_id),
+    thread_id: row.thread_id === null ? null : Number(row.thread_id),
+    author_user_id: row.author_user_id === null ? null : Number(row.author_user_id),
+    author: row.author,
+    body: row.body,
+    created_at: Number(row.created_at),
+    content_version: Number(row.content_version),
+    review_key: `patrol:${row.target_kind}:${row.target_message_id}:${row.content_version}`,
+  }));
+}
+
+export function applyModerationDecision(
+  db,
+  review,
+  { now = Date.now(), strikeThreshold = 3, strikeWindowMs = 30 * 24 * 60 * 60 * 1000 } = {},
+) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const inserted = db.prepare(`
+      INSERT OR IGNORE INTO moderation_reviews (
+        review_key, source, target_kind, target_message_id, content_version,
+        report_id, author_user_id, room_id, thread_id, category, severity,
+        decision, rationale, haiku_result, opus_result, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      review.review_key, review.source, review.target_kind, review.target_message_id,
+      review.content_version, review.report_id ?? null, review.author_user_id ?? null,
+      review.room_id, review.thread_id ?? null, review.category, review.severity,
+      review.decision, review.rationale, review.haiku_result ?? null,
+      review.opus_result ?? null, now,
+    );
+    if (!inserted.changes) {
+      db.exec('COMMIT');
+      return { applied: false, hidden: false, postingBlocked: false, strikes: 0 };
+    }
+
+    let hidden = false;
+    if (review.decision === 'hide') {
+      const table = review.target_kind === 'thread' ? 'standalone_thread_messages' : 'messages';
+      const versionCheck = review.source === 'patrol'
+        ? ' AND COALESCE(edited_at, created_at) = ?'
+        : '';
+      const params = [now, review.rationale, review.target_message_id];
+      if (review.source === 'patrol') params.push(review.content_version);
+      const info = db.prepare(
+        `UPDATE ${table} SET hidden_at = ?, hidden_reason = ? WHERE id = ? AND hidden_at IS NULL${versionCheck}`,
+      ).run(...params);
+      hidden = info.changes > 0;
+      if (hidden) {
+        db.prepare(`
+          INSERT INTO moderation_events (
+            action, target_kind, target_message_id, room_id, thread_id, user_id, reason, created_at
+          ) VALUES ('message_hidden', ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          review.target_kind, review.target_message_id, review.room_id,
+          review.thread_id ?? null, review.author_user_id ?? null, review.rationale, now,
+        );
+      }
+    }
+
+    if (review.report_id != null) {
+      db.prepare(`
+        UPDATE message_reports
+        SET status = 'resolved', ai_status = 'complete', ai_result = ?
+        WHERE id = ?
+      `).run(review.opus_result ?? JSON.stringify({ decision: review.decision }), review.report_id);
+    }
+
+    let strikes = 0;
+    let postingBlocked = false;
+    if (
+      review.decision === 'hide' && review.author_user_id != null &&
+      (hidden || review.source === 'report')
+    ) {
+      strikes = Number(db.prepare(`
+        SELECT COUNT(*) AS count FROM (
+          SELECT DISTINCT target_kind, target_message_id
+          FROM moderation_reviews
+          WHERE author_user_id = ? AND decision = 'hide' AND completed_at >= ?
+        )
+      `).get(review.author_user_id, now - strikeWindowMs).count);
+      if (strikes >= strikeThreshold) {
+        const reason = `AI審査で30日以内に${strikes}件の違反が確認されました`;
+        const info = db.prepare(`
+          UPDATE users SET posting_blocked_at = ?, posting_blocked_reason = ?
+          WHERE id = ? AND posting_blocked_at IS NULL AND password_hash IS NOT NULL
+        `).run(now, reason, review.author_user_id);
+        postingBlocked = info.changes > 0;
+        if (postingBlocked) {
+          db.prepare(`
+            INSERT INTO moderation_events (action, user_id, reason, created_at)
+            VALUES ('posting_blocked', ?, ?, ?)
+          `).run(review.author_user_id, reason, now);
+        }
+      }
+    }
+    db.exec('COMMIT');
+    return { applied: true, hidden, postingBlocked, strikes };
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function latestModerationEventId(db) {
+  return Number(db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM moderation_events').get().id);
+}
+
+export function listModerationEventsAfter(db, afterId, limit = 100) {
+  return db.prepare(`
+    SELECT id, action, target_kind, target_message_id, room_id, thread_id,
+           user_id, reason, created_at
+    FROM moderation_events WHERE id > ? ORDER BY id ASC LIMIT ?
+  `).all(afterId, limit).map((row) => ({
+    id: Number(row.id),
+    action: row.action,
+    target_kind: row.target_kind || null,
+    target_message_id: row.target_message_id === null ? null : Number(row.target_message_id),
+    room_id: row.room_id === null ? null : Number(row.room_id),
+    thread_id: row.thread_id === null ? null : Number(row.thread_id),
+    user_id: row.user_id === null ? null : Number(row.user_id),
+    reason: row.reason,
+    created_at: Number(row.created_at),
+  }));
+}
+
 /**
  * users に nickname を記録する（既存なら無視）。
  * @param {import('node:sqlite').DatabaseSync} db
@@ -730,6 +993,10 @@ function mapAccount(row, includePasswordHash = false) {
     banned_by_user_id: row.banned_by_user_id === null || row.banned_by_user_id === undefined
       ? null
       : Number(row.banned_by_user_id),
+    posting_blocked_at: row.posting_blocked_at === null || row.posting_blocked_at === undefined
+      ? null
+      : Number(row.posting_blocked_at),
+    posting_blocked_reason: row.posting_blocked_reason || null,
     created_at: Number(row.created_at),
   };
   if (includePasswordHash) account.password_hash = row.password_hash;
@@ -781,6 +1048,8 @@ export function createAccount(db, username, passwordHash) {
       banned_until: null,
       banned_at: null,
       banned_by_user_id: null,
+      posting_blocked_at: null,
+      posting_blocked_reason: null,
       created_at: createdAt,
     };
   } catch (err) {
@@ -795,7 +1064,8 @@ export function getAccountByUsername(db, username) {
     db
       .prepare(
         `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio,
-                u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
+                u.banned_until, u.banned_at, u.banned_by_user_id,
+                u.posting_blocked_at, u.posting_blocked_reason, u.created_at,
                 a.id AS avatar_id, a.original_name AS avatar_name,
                 a.mime_type AS avatar_mime_type, a.size AS avatar_size
          FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
@@ -811,7 +1081,8 @@ export function listAccounts(db) {
   return db
     .prepare(
       `SELECT u.id, u.nickname, u.role, u.display_name, u.bio,
-              u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
+              u.banned_until, u.banned_at, u.banned_by_user_id,
+              u.posting_blocked_at, u.posting_blocked_reason, u.created_at,
               a.id AS avatar_id, a.original_name AS avatar_name,
               a.mime_type AS avatar_mime_type, a.size AS avatar_size
        FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
@@ -838,7 +1109,8 @@ export function getAccountById(db, userId) {
     db
       .prepare(
         `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio,
-                u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
+                u.banned_until, u.banned_at, u.banned_by_user_id,
+                u.posting_blocked_at, u.posting_blocked_reason, u.created_at,
                 a.id AS avatar_id, a.original_name AS avatar_name,
                 a.mime_type AS avatar_mime_type, a.size AS avatar_size
          FROM users u LEFT JOIN attachments a ON a.id = u.avatar_attachment_id
@@ -882,6 +1154,29 @@ export function clearAccountBan(db, userId) {
   );
 }
 
+export function clearPostingBlock(db, userId, reason = '管理者が解除', now = Date.now()) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const info = db
+      .prepare(
+        `UPDATE users SET posting_blocked_at = NULL, posting_blocked_reason = NULL
+         WHERE id = ? AND posting_blocked_at IS NOT NULL AND password_hash IS NOT NULL`,
+      )
+      .run(userId);
+    if (info.changes) {
+      db.prepare(
+        `INSERT INTO moderation_events (action, user_id, reason, created_at)
+         VALUES ('posting_unblocked', ?, ?, ?)`,
+      ).run(userId, reason, now);
+    }
+    db.exec('COMMIT');
+    return Number(info.changes);
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 export function setAccountProfile(db, userId, displayName, bio, avatarAttachmentId) {
   const info = db
     .prepare(
@@ -905,7 +1200,8 @@ export function getAccountBySession(db, tokenHash, now = Date.now()) {
     db
       .prepare(
         `SELECT u.id, u.nickname, u.role, u.display_name, u.bio,
-                u.banned_until, u.banned_at, u.banned_by_user_id, u.created_at,
+                u.banned_until, u.banned_at, u.banned_by_user_id,
+                u.posting_blocked_at, u.posting_blocked_reason, u.created_at,
                 a.id AS avatar_id, a.original_name AS avatar_name,
                 a.mime_type AS avatar_mime_type, a.size AS avatar_size
          FROM sessions s JOIN users u ON u.id = s.user_id
@@ -994,7 +1290,7 @@ export function listStandaloneThreads(db, roomId) {
       `SELECT t.id, t.room_id, t.title, t.author_user_id, t.author, t.created_at,
               COUNT(m.id) AS reply_count, COALESCE(MAX(m.created_at), t.created_at) AS last_activity_at
        FROM standalone_threads t
-       LEFT JOIN standalone_thread_messages m ON m.thread_id = t.id
+       LEFT JOIN standalone_thread_messages m ON m.thread_id = t.id AND m.hidden_at IS NULL
        WHERE t.room_id = ?
        GROUP BY t.id
        ORDER BY last_activity_at DESC, t.id DESC`,
@@ -1035,7 +1331,7 @@ export function getStandaloneThreadMessages(db, threadId, limit = 100) {
     .prepare(
       `SELECT * FROM (
          SELECT id, thread_id, author_user_id, author, body, created_at, edited_at
-         FROM standalone_thread_messages WHERE thread_id = ?
+         FROM standalone_thread_messages WHERE thread_id = ? AND hidden_at IS NULL
          ORDER BY id DESC LIMIT ?
        ) ORDER BY id ASC`,
     )
@@ -1135,7 +1431,8 @@ export function listPushSubscriptions(db, excludeUserId = null) {
 export function getStandaloneThreadMessage(db, messageId, threadId) {
   const row = db
     .prepare(
-      `SELECT id, thread_id, author_user_id, author, body, created_at, edited_at
+      `SELECT id, thread_id, author_user_id, author, body, created_at, edited_at,
+              hidden_at, hidden_reason
        FROM standalone_thread_messages WHERE id = ? AND thread_id = ?`,
     )
     .get(messageId, threadId);
@@ -1148,6 +1445,8 @@ export function getStandaloneThreadMessage(db, messageId, threadId) {
     body: row.body,
     created_at: Number(row.created_at),
     edited_at: row.edited_at === null ? null : Number(row.edited_at),
+    hidden_at: row.hidden_at === null ? null : Number(row.hidden_at),
+    hidden_reason: row.hidden_reason || null,
   };
 }
 
