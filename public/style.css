@@ -115,6 +115,13 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .message-time { color: var(--faint); font-size: 11px; }
 .message-edited { color: var(--faint); font-size: 10px; }
 .message-body { color: #dbdee1; line-height: 1.42; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.message-reply-reference { display: flex; max-width: 100%; align-items: center; gap: 6px; margin: 0 0 2px; padding: 0; border: 0; color: var(--faint); background: transparent; font-size: 11px; text-align: left; cursor: pointer; }
+.message-reply-reference::before { content: ""; width: 20px; height: 9px; margin-left: -28px; border-top: 2px solid #4e5058; border-left: 2px solid #4e5058; border-radius: 6px 0 0; }
+.message-reply-reference strong { flex: 0 0 auto; color: var(--muted); }
+.message-reply-reference span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-reply-reference.unavailable { cursor: default; font-style: italic; }
+.message.reply-target-flash { animation: reply-target-flash 1.4s ease-out; }
+@keyframes reply-target-flash { from { background: rgba(88,101,242,.34); } to { background: transparent; } }
 .message.grouped::before { content: attr(data-short-time); position: absolute; left: 17px; top: 3px; width: 34px; color: transparent; font-size: 10px; text-align: right; }
 .message.grouped:hover::before { color: var(--faint); }
 .mention { padding: 0 2px; border-radius: 3px; color: #c9cdfb; background: var(--mention); font-weight: 550; }
@@ -133,6 +140,13 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .reaction-chip.mine { border-color: var(--accent); color: #dee0fc; background: rgba(88,101,242,.18); }
 
 .composer-wrap { position: relative; padding: 0 16px max(24px, env(safe-area-inset-bottom)); }
+.composer-reply { display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px; border-radius: var(--radius) var(--radius) 0 0; color: var(--faint); background: #2b2d31; font-size: 12px; }
+.composer-reply + .upload-panel { border-radius: 0 0 8px 8px; }
+.composer-reply > div { display: flex; min-width: 0; flex: 1; gap: 5px; }
+.composer-reply strong { flex: 0 0 auto; color: var(--text); }
+.composer-reply #reply-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-reply .icon-button { width: 28px; height: 28px; flex: 0 0 28px; }
+.composer-reply:not(.hidden) ~ .composer { border-radius: 0 0 var(--radius) var(--radius); }
 .composer { display: flex; align-items: flex-end; gap: 6px; min-height: 44px; padding: 0 6px; border-radius: var(--radius); background: var(--raised); }
 .composer textarea { max-height: 190px; min-height: 44px; padding: 12px 4px; color: var(--text); background: transparent; line-height: 20px; }
 .composer textarea:focus { box-shadow: none; }
@@ -278,7 +292,7 @@ dialog::backdrop { background: rgba(0,0,0,.72); }
   .topbar { padding-right: max(10px, env(safe-area-inset-right, 0px)); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
   .message { grid-template-columns: 48px minmax(0, 1fr); padding-right: 10px; padding-left: 10px; }
   .message:hover .message-actions, .message:focus-within .message-actions { display: none; }
-  .message.reaction-open .message-actions { position: static; display: flex; grid-column: 2; width: max-content; margin-top: 4px; border: 1px solid #26272b; box-shadow: 0 3px 8px rgba(0,0,0,.25); background: #2b2d31; }
+  .message.reaction-open .message-actions { position: static; display: flex; grid-column: 2; width: fit-content; max-width: 100%; flex-wrap: wrap; margin-top: 4px; border: 1px solid #26272b; box-shadow: 0 3px 8px rgba(0,0,0,.25); background: #2b2d31; }
   .thread-message:hover .thread-message-actions, .thread-message:focus-within .thread-message-actions { display: none; }
   .thread-message.message-menu-open .thread-message-actions { position: static; display: flex; grid-column: 2; width: max-content; margin-top: 5px; }
   .message.grouped::before { display: none; }

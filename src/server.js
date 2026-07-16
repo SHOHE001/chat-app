@@ -422,6 +422,15 @@ function resolveThreadRoot(db, roomId, value) {
   return root;
 }
 
+function resolveReplyTarget(db, roomId, value) {
+  const messageId = parseRoomId(value);
+  if (messageId === null) return null;
+  const message = getMessageById(db, messageId);
+  if (!message || message.hidden_at || message.room_id !== roomId) return null;
+  if (message.thread_root_id !== null) return null;
+  return message;
+}
+
 /**
  * 2つの文字列を定数時間で比較する（timingSafeEqual を SHA-256 ダイジェスト同士で行う）。
  * 長さの異なる文字列同士でも throw しない。
@@ -1609,6 +1618,19 @@ export function createChatServer({
           }
           threadRootId = root.id;
         }
+        let replyToId = null;
+        if (parsed.replyToId !== undefined && parsed.replyToId !== null) {
+          if (threadRootId !== null) {
+            sendError(ws, 'reply_not_found');
+            return;
+          }
+          const target = resolveReplyTarget(db, ws.roomId, parsed.replyToId);
+          if (!target) {
+            sendError(ws, 'reply_not_found');
+            return;
+          }
+          replyToId = target.id;
+        }
         const row = insertMessage(
           db,
           ws.roomId,
@@ -1617,6 +1639,7 @@ export function createChatServer({
           threadRootId,
           ws.user?.id ?? null,
           attachmentId,
+          replyToId,
         );
         broadcastMessage(row);
         const room = getRoomById(db, ws.roomId);

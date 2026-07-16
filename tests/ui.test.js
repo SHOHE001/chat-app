@@ -209,3 +209,14 @@ test('UI02 composer mention: textareaを維持して既存ユーザーのmention
   assert.match(app, /mention\.className = 'composer-highlight-mention'/);
   assert.match(app, /messageInput\.addEventListener\('scroll'/);
 });
+
+test('UI18 message reply: 長押しメニューから返信し、参照表示と取り消しができる', () => {
+  assert.match(html, /id="reply-preview" class="composer-reply hidden"/);
+  assert.match(html, /id="reply-cancel"/);
+  assert.match(app, /reply\.textContent = '返信'/);
+  assert.match(app, /replyToId: replyingTo\?\.id/);
+  assert.match(app, /function makeReplyReference\(message\)/);
+  assert.match(app, /返信先のメッセージは表示できません/);
+  assert.match(css, /\.message-reply-reference/);
+  assert.match(css, /\.composer-reply/);
+});

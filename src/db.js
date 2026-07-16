@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at INTEGER NOT NULL,
   edited_at INTEGER,
   thread_root_id INTEGER REFERENCES messages(id),
+  reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
   attachment_id TEXT REFERENCES attachments(id),
   hidden_at INTEGER,
   hidden_reason TEXT
@@ -169,11 +170,11 @@ export function openDb(path) {
   // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN、
   // 9=通報スナップショットとAI審査状態、10=AI巡回・非表示・投稿停止、
   // 11=ロール限定チャンネル、12=ユーザー別チャンネル通知設定（既定オン）、
-  // 13=チャンネル通知を既定オフへ変更。
+  // 13=チャンネル通知を既定オフへ変更、14=タイムラインのメッセージ返信。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 13');
-    userVersion = 13;
+    db.exec('PRAGMA user_version = 14');
+    userVersion = 14;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -474,8 +475,27 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 13) {
+    const messageColumns = new Set(
+      db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name),
+    );
+    db.exec('BEGIN');
+    try {
+      if (!messageColumns.has('reply_to_id')) {
+        db.exec('ALTER TABLE messages ADD COLUMN reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL');
+      }
+      db.exec('PRAGMA user_version = 14');
+      db.exec('COMMIT');
+      userVersion = 14;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_author_user ON messages(author_user_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)');
@@ -523,14 +543,16 @@ export function insertMessage(
   threadRootId = null,
   authorUserId = null,
   attachmentId = null,
+  replyToId = null,
 ) {
   const createdAt = Date.now();
   const stmt = db.prepare(
     `INSERT INTO messages
-       (room_id, author, author_user_id, body, created_at, thread_root_id, attachment_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (room_id, author, author_user_id, body, created_at, thread_root_id, attachment_id, reply_to_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  const info = stmt.run(roomId, author, authorUserId, body, createdAt, threadRootId, attachmentId);
+  const info = stmt.run(roomId, author, authorUserId, body, createdAt, threadRootId, attachmentId, replyToId);
+  const replyTarget = replyToId === null ? null : getMessageById(db, replyToId);
   return {
     id: Number(info.lastInsertRowid),
     room_id: roomId,
@@ -540,6 +562,13 @@ export function insertMessage(
     created_at: createdAt,
     edited_at: null,
     thread_root_id: threadRootId,
+    reply_to_id: replyToId,
+    reply: replyTarget && !replyTarget.hidden_at ? {
+      id: replyTarget.id,
+      author: replyTarget.author,
+      author_user_id: replyTarget.author_user_id,
+      body: replyTarget.body,
+    } : null,
     attachment: attachmentId ? getAttachmentById(db, attachmentId) : null,
     reactions: [],
   };
@@ -629,11 +658,16 @@ export function getRecentMessages(db, roomId, limit = 50) {
     .prepare(
       `SELECT * FROM (
          SELECT m.id, m.room_id, m.author, m.author_user_id, m.body, m.created_at, m.edited_at,
-                m.attachment_id,
+                m.attachment_id, m.reply_to_id,
+                CASE WHEN q.hidden_at IS NULL THEN q.id END AS reply_id,
+                CASE WHEN q.hidden_at IS NULL THEN q.author END AS reply_author,
+                CASE WHEN q.hidden_at IS NULL THEN q.author_user_id END AS reply_author_user_id,
+                CASE WHEN q.hidden_at IS NULL THEN q.body END AS reply_body,
                 COUNT(r.id) AS thread_reply_count,
                 MAX(r.created_at) AS thread_last_reply_at
          FROM messages m
          LEFT JOIN messages r ON r.thread_root_id = m.id AND r.room_id = m.room_id
+         LEFT JOIN messages q ON q.id = m.reply_to_id AND q.room_id = m.room_id
          WHERE m.room_id = ? AND m.thread_root_id IS NULL AND m.hidden_at IS NULL
          GROUP BY m.id
          ORDER BY m.id DESC
@@ -653,6 +687,13 @@ export function getRecentMessages(db, roomId, limit = 50) {
     created_at: Number(row.created_at),
     edited_at: row.edited_at === null ? null : Number(row.edited_at),
     thread_root_id: null, // タイムライン行は定義上 root のみ。broadcast row と形状を揃える
+    reply_to_id: row.reply_to_id === null ? null : Number(row.reply_to_id),
+    reply: row.reply_id === null ? null : {
+      id: Number(row.reply_id),
+      author: row.reply_author,
+      author_user_id: row.reply_author_user_id === null ? null : Number(row.reply_author_user_id),
+      body: row.reply_body,
+    },
     thread_reply_count: Number(row.thread_reply_count),
     thread_last_reply_at: row.thread_last_reply_at === null ? null : Number(row.thread_last_reply_at),
     attachment: row.attachment_id ? attachmentMap.get(row.attachment_id) || null : null,
@@ -703,7 +744,7 @@ export function getMessageById(db, messageId) {
   const row = db
     .prepare(
       `SELECT id, room_id, author, author_user_id, body, created_at, edited_at,
-              thread_root_id, attachment_id, hidden_at, hidden_reason
+              thread_root_id, reply_to_id, attachment_id, hidden_at, hidden_reason
        FROM messages WHERE id = ?`,
     )
     .get(messageId);
@@ -717,6 +758,7 @@ export function getMessageById(db, messageId) {
     created_at: Number(row.created_at),
     edited_at: row.edited_at === null ? null : Number(row.edited_at),
     thread_root_id: row.thread_root_id === null ? null : Number(row.thread_root_id),
+    reply_to_id: row.reply_to_id === null ? null : Number(row.reply_to_id),
     attachment_id: row.attachment_id || null,
     hidden_at: row.hidden_at === null ? null : Number(row.hidden_at),
     hidden_reason: row.hidden_reason || null,

@@ -40,6 +40,9 @@
   const uploadPanel = $('upload-panel');
   const notificationButton = $('notification-button');
   const mentionMenu = $('mention-menu');
+  const replyPreview = $('reply-preview');
+  const replyAuthor = $('reply-author');
+  const replyBody = $('reply-body');
   const membersPanel = $('members');
   const membersScrim = $('members-scrim');
   const membersToggle = $('members-toggle');
@@ -87,6 +90,7 @@
   let reportingTarget = null;
   let reports = [];
   let banningTarget = null;
+  let replyingTo = null;
   let registrationQrExpiresAt = 0;
   let registrationQrTimer = null;
   let serviceWorkerRegistration = null;
@@ -603,6 +607,7 @@
       return;
     }
     if (data.type === 'state') {
+      clearReply();
       currentRoomId = data.roomId;
       rooms = data.rooms || [];
       users = data.users || [];
@@ -646,6 +651,7 @@
     if (data.type === 'room_switched') {
       currentRoomId = data.roomId;
       clearAttachment();
+      clearReply();
       messages = (data.messages || []).filter((message) => message.thread_root_id == null);
       threads = data.threads || [];
       closeThread();
@@ -665,15 +671,31 @@
       return;
     }
     if (data.type === 'message_updated') {
+      let needsRender = false;
       const message = messages.find((item) => item.id === data.messageId);
       if (message) {
         message.body = data.body;
         message.edited_at = data.editedAt;
-        renderMessages(false);
+        needsRender = true;
       }
+      for (const item of messages) {
+        if (item.reply_to_id === data.messageId && item.reply) {
+          item.reply.body = data.body;
+          needsRender = true;
+        }
+      }
+      if (replyingTo?.id === data.messageId) {
+        replyingTo.body = data.body;
+        renderReplyPreview();
+      }
+      if (needsRender) renderMessages(false);
       return;
     }
     if (data.type === 'message_deleted' || data.type === 'message_hidden') {
+      for (const item of messages) {
+        if (item.reply_to_id === data.messageId) item.reply = null;
+      }
+      if (replyingTo?.id === data.messageId) clearReply();
       messages = messages.filter((item) => item.id !== data.messageId);
       renderMessages(false);
       if (data.type === 'message_hidden') showToast('AI審査によりメッセージが非表示になりました。');
@@ -768,6 +790,7 @@
     bad_avatar: 'その画像はアイコンに設定できません。',
     empty_message: '本文を空にはできません。',
     message_not_found: 'メッセージが見つかりません。',
+    reply_not_found: '返信先のメッセージが見つからないか、表示できません。',
     bad_ban_duration: 'BANする期間を選び直してください。',
     user_not_found: '対象のアカウントが見つかりません。',
     invite_required: '新規登録には管理者が表示した招待QRコードが必要です。',
@@ -1060,6 +1083,18 @@
 
   function makeManageActions(message, kind, row) {
     const fragment = document.createDocumentFragment();
+    if (kind === 'message') {
+      const reply = document.createElement('button');
+      reply.className = 'message-manage-action reply';
+      reply.type = 'button';
+      reply.textContent = '返信';
+      reply.title = 'このメッセージに返信';
+      reply.addEventListener('click', () => {
+        row.classList.remove('reaction-open', 'message-menu-open');
+        setReply(message);
+      });
+      fragment.append(reply);
+    }
     const copy = document.createElement('button');
     copy.className = 'message-manage-action';
     copy.type = 'button';
@@ -1274,7 +1309,7 @@
         separator.textContent = formatDate(message.created_at);
         messageList.append(separator);
       }
-      const grouped = Boolean(prior && prior.author === message.author && dateKey(prior.created_at) === dateKey(message.created_at) && message.created_at - prior.created_at < 5 * 60 * 1000);
+      const grouped = Boolean(!message.reply_to_id && prior && prior.author === message.author && dateKey(prior.created_at) === dateKey(message.created_at) && message.created_at - prior.created_at < 5 * 60 * 1000);
       messageList.append(makeMessage(message, grouped));
       prior = message;
     }
@@ -1293,6 +1328,7 @@
     avatar.classList.add('message-avatar');
     const content = document.createElement('div');
     content.className = 'message-content';
+    if (message.reply_to_id) content.append(makeReplyReference(message));
     const meta = document.createElement('div');
     meta.className = 'message-meta';
     const author = document.createElement('span');
@@ -1333,6 +1369,51 @@
     row.append(avatar, content, actions);
     installLongPress(row);
     return row;
+  }
+
+  function makeReplyReference(message) {
+    const reference = document.createElement('button');
+    reference.className = 'message-reply-reference';
+    reference.type = 'button';
+    if (message.reply) {
+      const targetUser = userForMessage(message.reply);
+      const author = document.createElement('strong');
+      author.textContent = accountName(targetUser) || message.reply.author;
+      const excerpt = document.createElement('span');
+      excerpt.textContent = message.reply.body?.trim() || '添付ファイル';
+      reference.append(author, excerpt);
+      reference.addEventListener('click', () => {
+        const target = messageList.querySelector(`[data-message-id="${message.reply.id}"]`);
+        if (!target) return;
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        target.classList.remove('reply-target-flash');
+        requestAnimationFrame(() => target.classList.add('reply-target-flash'));
+        setTimeout(() => target.classList.remove('reply-target-flash'), 1400);
+      });
+    } else {
+      reference.classList.add('unavailable');
+      reference.textContent = '返信先のメッセージは表示できません';
+      reference.disabled = true;
+    }
+    return reference;
+  }
+
+  function setReply(message) {
+    replyingTo = { id: message.id, author: message.author, author_user_id: message.author_user_id, body: message.body };
+    renderReplyPreview();
+    keepKeyboardOpen(messageInput);
+  }
+
+  function renderReplyPreview() {
+    replyPreview.classList.toggle('hidden', !replyingTo);
+    if (!replyingTo) return;
+    replyAuthor.textContent = accountName(userForMessage(replyingTo)) || replyingTo.author;
+    replyBody.textContent = replyingTo.body?.trim() || '添付ファイル';
+  }
+
+  function clearReply() {
+    replyingTo = null;
+    renderReplyPreview();
   }
 
   function installLongPress(row, container = messageList, openClass = 'reaction-open') {
@@ -1766,10 +1847,15 @@
       return;
     }
     if (!body && !pendingAttachment) return;
-    const sent = send('message', { body, attachmentId: pendingAttachment?.id });
+    const sent = send('message', {
+      body,
+      attachmentId: pendingAttachment?.id,
+      replyToId: replyingTo?.id,
+    });
     if (!sent) return;
     messageInput.value = '';
     clearAttachment(false);
+    clearReply();
     resizeTextarea(messageInput);
     renderComposerHighlight();
     mentionMenu.classList.add('hidden');
@@ -1786,6 +1872,10 @@
   attachButton.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => uploadFile(fileInput.files?.[0]));
   $('upload-remove').addEventListener('click', () => clearAttachment());
+  $('reply-cancel').addEventListener('click', () => {
+    clearReply();
+    keepKeyboardOpen(messageInput);
+  });
   messageInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
