@@ -87,6 +87,27 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS message_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reporter_user_id INTEGER NOT NULL REFERENCES users(id),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('message', 'thread')),
+  target_message_id INTEGER NOT NULL,
+  room_id INTEGER NOT NULL,
+  thread_id INTEGER,
+  reason_category TEXT NOT NULL,
+  details TEXT NOT NULL DEFAULT '',
+  message_author_user_id INTEGER,
+  message_author TEXT NOT NULL,
+  message_body TEXT NOT NULL,
+  message_created_at INTEGER NOT NULL,
+  attachment_json TEXT,
+  context_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  ai_status TEXT NOT NULL DEFAULT 'pending',
+  ai_result TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE (reporter_user_id, target_kind, target_message_id)
+);
 `;
 
 /**
@@ -102,11 +123,12 @@ export function openDb(path) {
 
   // user_version: 0=新規、1=旧メッセージ、2=メッセージスレッド、
   // 3=アカウント/リアクション/独立スレッド、4=添付ファイル、5=プロフィール、
-  // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN。
+  // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN、
+  // 9=通報スナップショットとAI審査状態。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 8');
-    userVersion = 8;
+    db.exec('PRAGMA user_version = 9');
+    userVersion = 9;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -258,6 +280,41 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 8) {
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS message_reports (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          reporter_user_id INTEGER NOT NULL REFERENCES users(id),
+          target_kind TEXT NOT NULL CHECK (target_kind IN ('message', 'thread')),
+          target_message_id INTEGER NOT NULL,
+          room_id INTEGER NOT NULL,
+          thread_id INTEGER,
+          reason_category TEXT NOT NULL,
+          details TEXT NOT NULL DEFAULT '',
+          message_author_user_id INTEGER,
+          message_author TEXT NOT NULL,
+          message_body TEXT NOT NULL,
+          message_created_at INTEGER NOT NULL,
+          attachment_json TEXT,
+          context_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'open',
+          ai_status TEXT NOT NULL DEFAULT 'pending',
+          ai_result TEXT,
+          created_at INTEGER NOT NULL,
+          UNIQUE (reporter_user_id, target_kind, target_message_id)
+        );
+      `);
+      db.exec('PRAGMA user_version = 9');
+      db.exec('COMMIT');
+      userVersion = 9;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_author_user ON messages(author_user_id)');
@@ -272,6 +329,8 @@ export function openDb(path) {
   );
   db.exec('CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_banned_until ON users(banned_until)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_created ON message_reports(created_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_status ON message_reports(status, ai_status)');
   db.exec('PRAGMA foreign_keys = ON');
 
   // デフォルトルーム "全体" を投入（既存なら無視）。
@@ -515,6 +574,124 @@ export function deleteMessage(db, messageId, roomId) {
     db.exec('ROLLBACK');
     throw err;
   }
+}
+
+function reportContextRows(db, targetKind, message, roomId, threadId) {
+  const columns = 'id, author_user_id, author, body, created_at';
+  let before;
+  let after;
+  if (targetKind === 'thread') {
+    before = db
+      .prepare(
+        `SELECT ${columns} FROM standalone_thread_messages
+         WHERE thread_id = ? AND id <= ? ORDER BY id DESC LIMIT 3`,
+      )
+      .all(threadId, message.id)
+      .reverse();
+    after = db
+      .prepare(
+        `SELECT ${columns} FROM standalone_thread_messages
+         WHERE thread_id = ? AND id > ? ORDER BY id ASC LIMIT 2`,
+      )
+      .all(threadId, message.id);
+  } else {
+    before = db
+      .prepare(
+        `SELECT ${columns} FROM messages
+         WHERE room_id = ? AND thread_root_id IS NULL AND id <= ? ORDER BY id DESC LIMIT 3`,
+      )
+      .all(roomId, message.id)
+      .reverse();
+    after = db
+      .prepare(
+        `SELECT ${columns} FROM messages
+         WHERE room_id = ? AND thread_root_id IS NULL AND id > ? ORDER BY id ASC LIMIT 2`,
+      )
+      .all(roomId, message.id);
+  }
+  return [...before, ...after].map((row) => ({
+    id: Number(row.id),
+    author_user_id: row.author_user_id === null ? null : Number(row.author_user_id),
+    author: row.author,
+    body: row.body,
+    created_at: Number(row.created_at),
+  }));
+}
+
+export function createMessageReport(
+  db,
+  { reporterUserId, targetKind, message, roomId, threadId = null, category, details = '', attachment = null },
+) {
+  const context = reportContextRows(db, targetKind, message, roomId, threadId);
+  const createdAt = Date.now();
+  try {
+    const info = db
+      .prepare(
+        `INSERT INTO message_reports (
+           reporter_user_id, target_kind, target_message_id, room_id, thread_id,
+           reason_category, details, message_author_user_id, message_author,
+           message_body, message_created_at, attachment_json, context_json,
+           status, ai_status, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'pending', ?)`,
+      )
+      .run(
+        reporterUserId,
+        targetKind,
+        message.id,
+        roomId,
+        threadId,
+        category,
+        details,
+        message.author_user_id,
+        message.author,
+        message.body,
+        message.created_at,
+        attachment ? JSON.stringify(attachment) : null,
+        JSON.stringify(context),
+        createdAt,
+      );
+    return { id: Number(info.lastInsertRowid), created_at: createdAt };
+  } catch (err) {
+    const duplicate =
+      err.errcode === 2067 ||
+      (typeof err.message === 'string' && err.message.includes('message_reports.reporter_user_id'));
+    if (duplicate) err.code = 'REPORT_EXISTS';
+    throw err;
+  }
+}
+
+export function listMessageReports(db, limit = 100) {
+  return db
+    .prepare(
+      `SELECT r.*, u.nickname AS reporter_username
+       FROM message_reports r
+       JOIN users u ON u.id = r.reporter_user_id
+       ORDER BY r.created_at DESC LIMIT ?`,
+    )
+    .all(limit)
+    .map((row) => ({
+      id: Number(row.id),
+      reporter_user_id: Number(row.reporter_user_id),
+      reporter_username: row.reporter_username,
+      target_kind: row.target_kind,
+      target_message_id: Number(row.target_message_id),
+      room_id: Number(row.room_id),
+      thread_id: row.thread_id === null ? null : Number(row.thread_id),
+      category: row.reason_category,
+      details: row.details,
+      message: {
+        author_user_id: row.message_author_user_id === null ? null : Number(row.message_author_user_id),
+        author: row.message_author,
+        body: row.message_body,
+        created_at: Number(row.message_created_at),
+        attachment: row.attachment_json ? JSON.parse(row.attachment_json) : null,
+      },
+      context: JSON.parse(row.context_json),
+      status: row.status,
+      ai_status: row.ai_status,
+      ai_result: row.ai_result || null,
+      created_at: Number(row.created_at),
+    }));
 }
 
 /**

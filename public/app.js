@@ -49,6 +49,8 @@
   const editMessageDialog = $('edit-message-dialog');
   const editMessageInput = $('edit-message-input');
   const deleteMessageDialog = $('delete-message-dialog');
+  const reportMessageDialog = $('report-message-dialog');
+  const reportInboxDialog = $('report-inbox-dialog');
   const banUserDialog = $('ban-user-dialog');
   const registrationQrDialog = $('registration-qr-dialog');
   const registrationQrImage = $('registration-qr-image');
@@ -74,6 +76,8 @@
   let profileUploadRequest = null;
   let editingTarget = null;
   let deletingTarget = null;
+  let reportingTarget = null;
+  let reports = [];
   let banningTarget = null;
   let registrationQrExpiresAt = 0;
   let registrationQrTimer = null;
@@ -496,6 +500,7 @@
     setAvatar(holder, me.username, me.avatar?.url);
     $('add-room-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
     $('registration-qr-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
+    $('report-inbox-button').classList.toggle('hidden', !['owner', 'admin'].includes(me.role));
   }
 
   function connect() {
@@ -682,6 +687,24 @@
       showAuth();
       return;
     }
+    if (data.type === 'report_submitted') {
+      reportingTarget = null;
+      reportMessageDialog.close();
+      $('report-message-form').reset();
+      showToast('通報をスタッフへ送りました。');
+      return;
+    }
+    if (data.type === 'reports') {
+      reports = data.reports || [];
+      renderReportInbox();
+      return;
+    }
+    if (data.type === 'report_created' && data.report) {
+      reports = [data.report, ...reports.filter((report) => report.id !== data.report.id)];
+      renderReportInbox();
+      if (data.report.reporter_user_id !== me?.id) showToast('新しい通報が届きました。');
+      return;
+    }
     if (data.type === 'error') handleError(data.reason, data);
   }
 
@@ -706,6 +729,8 @@
     invite_required: '新規登録には管理者が表示した招待QRコードが必要です。',
     invite_invalid: 'この招待QRコードは更新され、無効になりました。新しいQRコードを読み取ってください。',
     invite_expired: 'この招待QRコードは期限切れです。新しいQRコードを読み取ってください。',
+    bad_report: '通報理由を選び、自由記述の場合は内容を入力してください。',
+    already_reported: 'このメッセージはすでに通報済みです。',
   };
 
   function formatBanMessage(bannedUntil) {
@@ -729,6 +754,8 @@
     } else if (!me || pendingAuth) {
       pendingAuth = false;
       authError.textContent = message;
+    } else if (reportMessageDialog.open && ['bad_report', 'already_reported'].includes(reason)) {
+      $('report-error').textContent = message;
     } else {
       showToast(message);
     }
@@ -938,6 +965,16 @@
 
   function makeManageActions(message, kind, row) {
     const fragment = document.createDocumentFragment();
+    const report = document.createElement('button');
+    report.className = 'message-manage-action report';
+    report.type = 'button';
+    report.textContent = '通報';
+    report.title = 'このメッセージを通報';
+    report.addEventListener('click', () => {
+      row.classList.remove('reaction-open', 'message-menu-open');
+      openReportMessage(message, kind);
+    });
+    fragment.append(report);
     if (!canModifyMessage(message)) return fragment;
     const divider = document.createElement('span');
     divider.className = 'message-action-divider';
@@ -988,6 +1025,87 @@
     const preview = message.body?.trim() || (message.attachment ? `添付: ${message.attachment.name}` : '本文なし');
     $('delete-message-preview').textContent = preview;
     deleteMessageDialog.showModal();
+  }
+
+  function openReportMessage(message, kind) {
+    reportingTarget = {
+      kind,
+      messageId: message.id,
+      threadId: kind === 'thread' ? openThread?.id : null,
+    };
+    const preview = message.body?.trim() || (message.attachment ? `添付: ${message.attachment.name}` : '本文なし');
+    $('report-message-preview').textContent = preview;
+    $('report-message-form').reset();
+    $('report-error').textContent = '';
+    $('report-details').required = false;
+    $('report-details-label').firstChild.textContent = '詳しい内容（任意）';
+    reportMessageDialog.showModal();
+  }
+
+  function closeReportMessage() {
+    reportingTarget = null;
+    $('report-message-form').reset();
+    $('report-error').textContent = '';
+    if (reportMessageDialog.open) reportMessageDialog.close();
+  }
+
+  function reportCategoryLabel(category) {
+    return {
+      harassment: 'いやなことを言われた',
+      personal_info: '個人情報が書かれている',
+      scary_media: 'こわい画像・動画がある',
+      spam: '迷惑な連続投稿',
+      other: '自由記述',
+    }[category] || category;
+  }
+
+  function renderReportInbox() {
+    const list = $('report-list');
+    list.replaceChildren();
+    if (!reports.length) {
+      const empty = document.createElement('p');
+      empty.className = 'report-empty';
+      empty.textContent = '通報はありません。';
+      list.append(empty);
+      return;
+    }
+    for (const report of reports) {
+      const card = document.createElement('article');
+      card.className = 'report-card';
+      const meta = document.createElement('div');
+      meta.className = 'report-meta';
+      const reason = document.createElement('strong');
+      reason.textContent = reportCategoryLabel(report.category);
+      const time = document.createElement('time');
+      time.textContent = formatExact(report.created_at);
+      meta.append(reason, time);
+      const byline = document.createElement('p');
+      byline.className = 'report-byline';
+      byline.textContent = `通報者: @${report.reporter_username} · 投稿者: @${report.message.author}`;
+      const body = document.createElement('blockquote');
+      body.textContent = report.message.body || '本文なし';
+      card.append(meta, byline, body);
+      if (report.details) {
+        const details = document.createElement('p');
+        details.className = 'report-details';
+        details.textContent = report.details;
+        card.append(details);
+      }
+      const context = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = `前後の会話 ${report.context.length}件`;
+      context.append(summary);
+      for (const item of report.context) {
+        const line = document.createElement('p');
+        line.textContent = `${item.id === report.target_message_id ? '▶ ' : ''}@${item.author}: ${item.body || '本文なし'}`;
+        context.append(line);
+      }
+      const ai = document.createElement('small');
+      ai.className = 'report-ai-status';
+      ai.textContent = report.ai_status === 'pending' ? 'AI確認: 未接続・審査待ち' : `AI確認: ${report.ai_status}`;
+      card.append(context, ai);
+      list.append(card);
+    }
   }
 
   function renderMessages(scrollToBottom) {
@@ -1335,13 +1453,11 @@
       const body = document.createElement('p');
       appendRichText(body, message.body);
       row.append(meta, body);
-      if (canModifyMessage(message)) {
-        const actions = document.createElement('div');
-        actions.className = 'thread-message-actions';
-        actions.append(makeManageActions(message, 'thread', row));
-        row.append(actions);
-        installLongPress(row, threadMessages, 'message-menu-open');
-      }
+      const actions = document.createElement('div');
+      actions.className = 'thread-message-actions';
+      actions.append(makeManageActions(message, 'thread', row));
+      row.append(actions);
+      installLongPress(row, threadMessages, 'message-menu-open');
       threadMessages.append(row);
     }
     renderThreads();
@@ -1552,6 +1668,39 @@
   $('logout-close').addEventListener('click', closeLogoutDialog);
   $('logout-cancel').addEventListener('click', closeLogoutDialog);
   $('logout-confirm').addEventListener('click', () => { void confirmLogout(); });
+  $('report-message-close').addEventListener('click', closeReportMessage);
+  $('report-message-cancel').addEventListener('click', closeReportMessage);
+  $('report-category').addEventListener('change', () => {
+    const freeform = $('report-category').value === 'other';
+    $('report-details').required = freeform;
+    $('report-details-label').firstChild.textContent = freeform ? '詳しい内容（必須）' : '詳しい内容（任意）';
+  });
+  $('report-message-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!reportingTarget) return;
+    const category = $('report-category').value;
+    const details = $('report-details').value.trim();
+    if (!category || (category === 'other' && !details)) {
+      $('report-error').textContent = '通報理由を選び、自由記述の場合は内容を入力してください。';
+      return;
+    }
+    $('report-error').textContent = '';
+    send('report_message', {
+      targetKind: reportingTarget.kind,
+      messageId: reportingTarget.messageId,
+      threadId: reportingTarget.threadId,
+      category,
+      details,
+    });
+  });
+  $('report-inbox-button').addEventListener('click', () => {
+    reports = [];
+    $('report-list').innerHTML = '<p class="report-empty">読み込み中…</p>';
+    reportInboxDialog.showModal();
+    send('get_reports');
+  });
+  $('report-inbox-close').addEventListener('click', () => reportInboxDialog.close());
+  $('report-inbox-done').addEventListener('click', () => reportInboxDialog.close());
   $('profile-button').addEventListener('click', () => openProfile(me, true));
   $('profile-avatar-button').addEventListener('click', () => profileAvatarInput.click());
   profileAvatarInput.addEventListener('change', () => uploadProfileAvatar(profileAvatarInput.files?.[0]));

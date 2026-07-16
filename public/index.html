@@ -42,6 +42,7 @@
         <div id="my-avatar" class="avatar small"></div>
         <div class="account-copy"><strong id="my-name"></strong><span id="my-role"></span></div>
         <button id="registration-qr-button" class="icon-button hidden" type="button" title="登録用QRコード" aria-label="登録用QRコードを表示">▦</button>
+        <button id="report-inbox-button" class="icon-button hidden" type="button" title="通報一覧" aria-label="通報一覧を表示">🚩</button>
         <button id="notification-button" class="icon-button notification-button" type="button" title="通知を設定" aria-label="通知を設定" aria-pressed="false">🔔</button>
         <button id="profile-button" class="icon-button" title="プロフィールを編集">✎</button>
         <button id="logout-button" class="icon-button" title="ログアウト">↪</button>
@@ -136,6 +137,32 @@
       <header><div><h2>メッセージを削除</h2><p>この操作は取り消せません。</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
       <blockquote id="delete-message-preview" class="delete-message-preview"></blockquote>
       <footer><button value="cancel" class="secondary-button">キャンセル</button><button value="delete" class="danger-button">削除する</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="report-message-dialog" class="report-message-dialog">
+    <form id="report-message-form" class="dialog-form">
+      <header><div><h2>このメッセージを通報</h2><p>スタッフが内容と前後の会話を確認します。</p></div><button id="report-message-close" type="button" class="icon-button" aria-label="閉じる">×</button></header>
+      <div id="report-message-preview" class="delete-message-preview"></div>
+      <label>通報する理由<select id="report-category" required>
+        <option value="">理由を選んでください</option>
+        <option value="harassment">いやなことを言われた</option>
+        <option value="personal_info">個人情報が書かれている</option>
+        <option value="scary_media">こわい画像・動画がある</option>
+        <option value="spam">迷惑な連続投稿</option>
+        <option value="other">自由に書く</option>
+      </select></label>
+      <label id="report-details-label">詳しい内容（任意）<textarea id="report-details" maxlength="2000" rows="4" placeholder="スタッフに伝えたいことがあれば書いてください"></textarea></label>
+      <p id="report-error" class="form-error"></p>
+      <footer><button id="report-message-cancel" type="button" class="secondary-button">キャンセル</button><button type="submit" class="danger-button">通報を送信</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="report-inbox-dialog" class="report-inbox-dialog">
+    <form class="dialog-form">
+      <header><div><h2>通報一覧</h2><p>通報時点の投稿と前後の会話を保全しています。</p></div><button id="report-inbox-close" type="button" class="icon-button" aria-label="閉じる">×</button></header>
+      <div id="report-list" class="report-list"><p class="report-empty">読み込み中…</p></div>
+      <footer><button id="report-inbox-done" type="button" class="secondary-button">閉じる</button></footer>
     </form>
   </dialog>
 

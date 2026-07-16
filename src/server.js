@@ -25,6 +25,8 @@ import {
   getMessageById,
   updateMessage,
   deleteMessage,
+  createMessageReport,
+  listMessageReports,
   createAccount,
   getAccountByUsername,
   getAccountById,
@@ -81,6 +83,13 @@ const BAN_DURATIONS = new Map([
   ['7d', 7 * 24 * 60 * 60 * 1000],
   ['30d', 30 * 24 * 60 * 60 * 1000],
   ['permanent', null],
+]);
+const REPORT_CATEGORIES = new Set([
+  'harassment',
+  'personal_info',
+  'scary_media',
+  'spam',
+  'other',
 ]);
 
 const MIME_TYPES = {
@@ -939,6 +948,12 @@ export function createChatServer({
     }
   }
 
+  function broadcastToModerators(payload) {
+    for (const client of wss.clients) {
+      if (client.user && ['owner', 'admin'].includes(client.user.role)) sendJson(client, payload);
+    }
+  }
+
   function issueSession(user) {
     const token = crypto.randomBytes(32).toString('base64url');
     createSession(db, hashSessionToken(token), user.id, Date.now() + SESSION_LIFETIME_MS);
@@ -1203,6 +1218,87 @@ export function createChatServer({
           deleteMessage(db, message.id, ws.roomId);
           broadcastToRoom(ws.roomId, { type: 'message_deleted', messageId: message.id });
         }
+        return;
+      }
+
+      if (parsed.type === 'report_message') {
+        if (!ws.user) {
+          sendError(ws, 'not_authenticated');
+          return;
+        }
+        const targetKind = parsed.targetKind;
+        const messageId = parseRoomId(parsed.messageId);
+        const category = REPORT_CATEGORIES.has(parsed.category) ? parsed.category : null;
+        const details = typeof parsed.details === 'string'
+          ? parsed.details.trim().slice(0, MAX_BODY_LENGTH)
+          : '';
+        if (!messageId || !category || (category === 'other' && !details)) {
+          sendError(ws, 'bad_report');
+          return;
+        }
+
+        let message;
+        let threadId = null;
+        let attachment = null;
+        if (targetKind === 'message') {
+          message = getMessageById(db, messageId);
+          if (!message || message.room_id !== ws.roomId || message.thread_root_id !== null) {
+            sendError(ws, 'message_not_found');
+            return;
+          }
+          if (message.attachment_id) {
+            const storedAttachment = getAttachmentById(db, message.attachment_id);
+            if (storedAttachment) {
+              attachment = {
+                name: storedAttachment.name,
+                mime_type: storedAttachment.mime_type,
+                size: storedAttachment.size,
+              };
+            }
+          }
+        } else if (targetKind === 'thread') {
+          threadId = parseRoomId(parsed.threadId);
+          const thread = threadId ? getStandaloneThread(db, threadId, ws.roomId) : undefined;
+          message = thread ? getStandaloneThreadMessage(db, messageId, thread.id) : undefined;
+          if (!thread || !message) {
+            sendError(ws, 'message_not_found');
+            return;
+          }
+        } else {
+          sendError(ws, 'bad_report');
+          return;
+        }
+
+        try {
+          const created = createMessageReport(db, {
+            reporterUserId: ws.user.id,
+            targetKind,
+            message,
+            roomId: ws.roomId,
+            threadId,
+            category,
+            details,
+            attachment,
+          });
+          const report = listMessageReports(db).find((item) => item.id === created.id);
+          sendJson(ws, { type: 'report_submitted', reportId: created.id });
+          broadcastToModerators({ type: 'report_created', report });
+        } catch (err) {
+          if (err.code === 'REPORT_EXISTS') {
+            sendError(ws, 'already_reported');
+            return;
+          }
+          throw err;
+        }
+        return;
+      }
+
+      if (parsed.type === 'get_reports') {
+        if (!canManageRooms(ws)) {
+          sendError(ws, 'forbidden');
+          return;
+        }
+        sendJson(ws, { type: 'reports', reports: listMessageReports(db) });
         return;
       }
 
