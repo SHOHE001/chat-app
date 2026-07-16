@@ -77,6 +77,9 @@ const MAX_THREAD_TITLE_LENGTH = 80;
 const HISTORY_LIMIT = 50;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+const GATE_COOKIE_NAME = '__Host-chat_gate';
+const GATE_COOKIE_LIFETIME_MS = 12 * 60 * 60 * 1000;
+const MAX_GATE_FORM_BYTES = 4096;
 const ALLOWED_REACTIONS = new Set(['👍', '❤️', '😂', '🎉', '👀']);
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PUSH_API_BYTES = 16 * 1024;
@@ -454,6 +457,114 @@ function checkBasicAuth(header, basicAuth) {
   return userOk && passwordOk;
 }
 
+function createGateToken(secret, currentTime) {
+  const expiresAt = currentTime + GATE_COOKIE_LIFETIME_MS;
+  const payload = String(expiresAt) + '.' + crypto.randomBytes(18).toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  return payload + '.' + signature;
+}
+
+function checkGateCookie(cookieHeader, secret, currentTime) {
+  if (typeof cookieHeader !== 'string') return false;
+  const prefix = GATE_COOKIE_NAME + '=';
+  const values = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(prefix))
+    .map((part) => part.slice(prefix.length));
+  if (values.length !== 1) return false;
+  const match = /^(\d{1,16})\.([A-Za-z0-9_-]{24})\.([A-Za-z0-9_-]{43})$/.exec(values[0]);
+  if (!match) return false;
+  const expiresAt = Number(match[1]);
+  if (
+    !Number.isSafeInteger(expiresAt) ||
+    expiresAt <= currentTime ||
+    expiresAt > currentTime + GATE_COOKIE_LIFETIME_MS
+  ) {
+    return false;
+  }
+  const payload = match[1] + '.' + match[2];
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  return safeStringEqual(match[3], expected);
+}
+
+function gateCookieHeader(secret, currentTime) {
+  const maxAge = Math.floor(GATE_COOKIE_LIFETIME_MS / 1000);
+  return GATE_COOKIE_NAME + '=' + createGateToken(secret, currentTime) +
+    '; Path=/; Max-Age=' + maxAge + '; HttpOnly; Secure; SameSite=Strict';
+}
+
+function gateLoginHtml(errorMessage = '') {
+  const error = errorMessage
+    ? '<p class="error" role="alert">' + errorMessage + '</p>'
+    : '<p class="error" aria-hidden="true">&nbsp;</p>';
+  return [
+    '<!doctype html>',
+    '<html lang="ja"><head><meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">',
+    '<meta name="theme-color" content="#1e1f22"><title>Chat Lab 入口</title>',
+    '<style>',
+    ':root{color-scheme:dark}*{box-sizing:border-box}html,body{min-height:100%;margin:0}',
+    'body{display:grid;place-items:center;padding:24px;background:#1e1f22;color:#f2f3f5;font:15px/1.5 system-ui,-apple-system,sans-serif}',
+    'main{width:min(420px,100%);padding:28px;border-radius:12px;background:#313338;box-shadow:0 18px 55px #0008}',
+    'h1{margin:0 0 8px;font-size:24px}p{margin:0 0 20px;color:#b5bac1}',
+    'label{display:grid;gap:7px;margin-top:16px;color:#b5bac1;font-size:13px;font-weight:700}',
+    'input{width:100%;height:46px;padding:0 12px;border:0;border-radius:5px;outline:0;background:#1e1f22;color:#f2f3f5;font:inherit}',
+    'input:focus{box-shadow:0 0 0 2px #5865f2}.error{min-height:23px;margin:14px 0 0;color:#fa777c}',
+    'button{width:100%;min-height:46px;margin-top:14px;border:0;border-radius:5px;background:#5865f2;color:white;font:inherit;font-weight:700}',
+    'small{display:block;margin-top:16px;color:#949ba4}',
+    '</style></head><body><main><h1>Chat Labへ入る</h1>',
+    '<p>サイト入口のBasic認証と同じ情報を入力してください。</p>',
+    '<form method="post" action="/basic-login">',
+    '<label>ユーザー名<input name="user" autocomplete="username" autocapitalize="none" required></label>',
+    '<label>パスワード<input name="password" type="password" autocomplete="current-password" required></label>',
+    error,
+    '<button type="submit">認証して進む</button></form>',
+    '<small>認証後も、アプリ内アカウントへのログインが必要です。</small>',
+    '</main></body></html>',
+  ].join('');
+}
+
+function sendGateLoginPage(res, { status = 200, errorMessage = '', retryAfterMs = 0 } = {}) {
+  const headers = {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+  };
+  if (retryAfterMs > 0) {
+    headers['Retry-After'] = String(Math.max(1, Math.ceil(retryAfterMs / 1000)));
+  }
+  res.writeHead(status, headers);
+  res.end(gateLoginHtml(errorMessage));
+}
+
+function readGateForm(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_GATE_FORM_BYTES) {
+        tooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.once('error', () => reject(new Error('bad_form')));
+    req.once('end', () => {
+      if (tooLarge) {
+        reject(new Error('too_large'));
+        return;
+      }
+      try {
+        resolve(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        reject(new Error('bad_form'));
+      }
+    });
+  });
+}
+
 function assertBasicAuthConfig(basicAuth) {
   if (basicAuth === undefined) return;
   if (
@@ -549,6 +660,7 @@ export function createChatServer({
   assertBasicAuthConfig(basicAuth);
   const root = path.resolve(staticDir);
   const rootReal = fs.realpathSync(root);
+  const gateSecret = crypto.randomBytes(32);
 
   const db = openDb(dbPath);
   let vapidPublicKey = getAppConfig(db, 'vapid_public_key');
@@ -612,9 +724,24 @@ export function createChatServer({
 
   const server = http.createServer((req, res) => {
     applySecurityHeaders(res);
+    let requestUrl;
+    try {
+      requestUrl = new URL(req.url, 'http://localhost');
+    } catch {
+      sendStatus(res, 400, 'Bad Request');
+      return;
+    }
+    const { pathname } = requestUrl;
     const clientKey = requestClientKey(req);
-    const basicAuthOk = checkBasicAuth(req.headers.authorization, basicAuth);
-    if (basicAuth && !basicAuthOk) {
+    if (pathname === '/basic-login') {
+      void handleGateLogin(req, res, clientKey);
+      return;
+    }
+    const basicHeaderOk = checkBasicAuth(req.headers.authorization, basicAuth);
+    const gateCookieOk = Boolean(
+      basicAuth && checkGateCookie(req.headers.cookie, gateSecret, now()),
+    );
+    if (basicAuth && !basicHeaderOk && !gateCookieOk) {
       const existingRetry = Math.max(
         globalAuthLimiter.retryAfterMs('global'),
         basicAuthLimiter.retryAfterMs(clientKey),
@@ -631,14 +758,6 @@ export function createChatServer({
       basicAuthLimiter.clear(clientKey);
       globalAuthLimiter.clear('global');
     }
-    let requestUrl;
-    try {
-      requestUrl = new URL(req.url, 'http://localhost');
-    } catch {
-      sendStatus(res, 400, 'Bad Request');
-      return;
-    }
-    const { pathname } = requestUrl;
     if (pathname === '/api/uploads') {
       handleUpload(req, res);
       return;
@@ -665,6 +784,81 @@ export function createChatServer({
     }
     serveStatic(req, res, root, rootReal);
   });
+
+  async function handleGateLogin(req, res, clientKey) {
+    if (!basicAuth) {
+      sendStatus(res, 404, 'Not Found');
+      return;
+    }
+    if (req.method === 'GET') {
+      sendGateLoginPage(res);
+      return;
+    }
+    if (req.method !== 'POST') {
+      sendGateLoginPage(res, {
+        status: 405,
+        errorMessage: 'この操作は利用できません。',
+      });
+      return;
+    }
+    if (!String(req.headers['content-type'] || '').startsWith('application/x-www-form-urlencoded')) {
+      sendGateLoginPage(res, {
+        status: 415,
+        errorMessage: '入力形式が正しくありません。',
+      });
+      return;
+    }
+    const existingRetry = Math.max(
+      globalAuthLimiter.retryAfterMs('global'),
+      basicAuthLimiter.retryAfterMs(clientKey),
+    );
+    if (existingRetry) {
+      sendGateLoginPage(res, {
+        status: 429,
+        errorMessage: '試行回数が多すぎます。時間をおいて再度お試しください。',
+        retryAfterMs: existingRetry,
+      });
+      return;
+    }
+    let form;
+    try {
+      form = await readGateForm(req);
+    } catch (error) {
+      sendGateLoginPage(res, {
+        status: error.message === 'too_large' ? 413 : 400,
+        errorMessage: '入力内容を読み取れませんでした。',
+      });
+      return;
+    }
+    const users = form.getAll('user');
+    const passwords = form.getAll('password');
+    const user = users.length === 1 ? users[0] : '';
+    const password = passwords.length === 1 ? passwords[0] : '';
+    const userOk = safeStringEqual(user, basicAuth.user);
+    const passwordOk = safeStringEqual(password, basicAuth.password);
+    if (!userOk || !passwordOk) {
+      const retryAfterMs = Math.max(
+        globalAuthLimiter.recordFailure('global'),
+        basicAuthLimiter.recordFailure(clientKey),
+      );
+      sendGateLoginPage(res, {
+        status: retryAfterMs ? 429 : 403,
+        errorMessage: retryAfterMs
+          ? '試行回数が多すぎます。時間をおいて再度お試しください。'
+          : 'ユーザー名またはパスワードが違います。',
+        retryAfterMs,
+      });
+      return;
+    }
+    basicAuthLimiter.clear(clientKey);
+    globalAuthLimiter.clear('global');
+    res.writeHead(303, {
+      Location: '/',
+      'Set-Cookie': gateCookieHeader(gateSecret, now()),
+      'Cache-Control': 'no-store',
+    });
+    res.end();
+  }
 
   function sendApiError(res, status, error) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1003,8 +1197,11 @@ export function createChatServer({
     socket.on('error', onSocketError);
 
     const clientKey = requestClientKey(req);
-    const basicAuthOk = checkBasicAuth(req.headers.authorization, basicAuth);
-    if (basicAuth && !basicAuthOk) {
+    const basicHeaderOk = checkBasicAuth(req.headers.authorization, basicAuth);
+    const gateCookieOk = Boolean(
+      basicAuth && checkGateCookie(req.headers.cookie, gateSecret, now()),
+    );
+    if (basicAuth && !basicHeaderOk && !gateCookieOk) {
       const existingRetry = Math.max(
         globalAuthLimiter.retryAfterMs('global'),
         basicAuthLimiter.retryAfterMs(clientKey),

@@ -38,6 +38,11 @@
 - adminは一般ロールを、ownerはadminと一般ロールをBAN・解除できる。本人とownerはBAN不可。期間は10分、1時間、24時間、7日、30日、永久で、BAN時は全セッション・通知購読を削除して接続中WebSocketも切断する。
 - owner/adminは5分間有効な招待トークン入り登録QRを生成・保存できる。手動更新すると旧QRは即時失効する。初回owner以外の新規登録は有効なQRを必須とし、旧匿名joinは通常運用で無効。生成APIもmemberを拒否し、外部QRサービスへURLを送らない。同じQRの5分以内の複数回利用は許可する。
 - Basic credential は厳密な Base64 検証後、SHA-256 digest の定数時間比較で照合する。
+- Safariで標準Basicダイアログが機能しない場合だけ`/basic-login`を予備入口に使う。通常URLのBasic認証と
+  WebSocketのBasic header認証は削除・弱体化しない。予備入口は同じBasic資格情報を照合し、12時間有効な
+  `__Host-` prefix付き`Secure`・`HttpOnly`・`SameSite=Strict` Cookieを発行する。CookieはHTTPと
+  WebSocket upgradeでBasic headerとのOR条件として検証し、改ざん・重複・期限切れを拒否する。誤入力は
+  Basicと同じ接続元・全体レート制限へ加算し、日本語エラーを画面内へ表示する。
 - WebSocket は `WebSocketServer({ noServer: true })` と自前の `upgrade` ハンドラで認証する。HTTPだけを認証して
   WebSocketを迂回可能に戻してはいけない。
 - Basic失敗は接続元ごとに10分10回、アプリログイン失敗はユーザー名＋接続元ごとに15分5回で15分停止する。

@@ -42,6 +42,14 @@ cp .env.example .env   # 必要に応じて値を編集する
 `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` は HTTP の静的ファイル配信と WebSocket upgrade の両方を保護する。
 両方未設定（空・空白のみを含む）なら従来どおり認証なしで動作する。片方のみの設定は設定ミスとして fail-fast する。
 Basic認証は公開URLの共有入口であり、アプリ内アカウントとは別の認証である。
+
+Safariの標準Basic認証ダイアログが入力を受理しない場合は、同じ資格情報を
+`https://<公開ホスト>/basic-login`へ入力する。通常URLのBasic認証は無効化せず、そのまま維持する。
+予備入口は資格情報が正しい場合だけ12時間有効な`Secure`・`HttpOnly`・`SameSite=Strict` Cookieを発行し、
+同一オリジンのHTTPとWebSocket upgradeでBasicヘッダーの代わりに受理する。Cookieは改ざん検知付きで、
+サービス再起動時または12時間経過時に無効になる。誤入力はフォーム内に日本語表示し、Basicと同じレート制限へ
+加算する。予備入口を通過した後も、アプリ内アカウントでのログインは別途必要である。
+
 Basic認証は接続元ごとに10分で10回、アプリログインはユーザー名と接続元ごとに15分で5回失敗すると15分停止する。
 HTTPとWebSocket upgradeは`429 Retry-After`、アプリログインは`rate_limited`と残り待機時間を返す。Funnelから
 ループバック転送された場合だけ`X-Forwarded-For`の右端を接続元として使い、直接接続では転送ヘッダーを信用しない。
