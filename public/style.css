@@ -175,7 +175,7 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .role-badge { color: var(--faint); font-size: 10px; text-transform: uppercase; }
 .ban-status { display: block; margin-top: 2px; color: #fa777c; font-size: 10px; }
 .member-moderation { display: grid; flex: 0 0 auto; gap: 4px; justify-items: stretch; }
-.role-select { width: 72px; border: 0; color: var(--muted); background: #1e1f22; font-size: 11px; }
+.role-select { width: 88px; border: 0; color: var(--muted); background: #1e1f22; font-size: 11px; }
 .member-ban-button { min-height: 22px; padding: 0 7px; border: 1px solid #a1282d; border-radius: 4px; color: #fa777c; background: transparent; font-size: 10px; font-weight: 700; cursor: pointer; }
 .member-ban-button:hover { color: #fff; background: #da373c; }
 .member-ban-button.unban { border-color: #4e5058; color: var(--muted); }

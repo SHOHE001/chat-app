@@ -148,7 +148,14 @@
   }
 
   function formatRole(role) {
-    return { owner: 'オーナー', admin: '管理者', member: 'メンバー' }[role] || role;
+    return {
+      owner: 'オーナー',
+      admin: '管理者',
+      member: 'メンバー',
+      adult: '大人',
+      child: '子供',
+      staff: 'スタッフ',
+    }[role] || role;
   }
 
   function showToast(text) {
@@ -896,7 +903,7 @@
       if (me?.role === 'owner' && user.role !== 'owner') {
         const select = document.createElement('select');
         select.className = 'role-select';
-        for (const value of ['member', 'admin']) {
+        for (const value of ['member', 'adult', 'child', 'staff', 'admin']) {
           const option = document.createElement('option');
           option.value = value;
           option.textContent = formatRole(value);
@@ -952,10 +959,14 @@
 
   function canModerateUser(user) {
     if (!me || !user || me.id === user.id || user.role === 'owner') return false;
-    return me.role === 'owner' || (me.role === 'admin' && user.role === 'member');
+    return me.role === 'owner' || (
+      me.role === 'admin' && ['member', 'adult', 'child', 'staff'].includes(user.role)
+    );
   }
 
-  function roleOrder(role) { return { owner: 0, admin: 1, member: 2 }[role] ?? 3; }
+  function roleOrder(role) {
+    return { owner: 0, admin: 1, staff: 2, adult: 3, member: 4, child: 5 }[role] ?? 6;
+  }
   function dateKey(timestamp) { return new Date(timestamp).toLocaleDateString('en-CA'); }
   function formatDate(timestamp) {
     const date = new Date(timestamp);

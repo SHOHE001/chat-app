@@ -95,6 +95,8 @@ const REPORT_CATEGORIES = new Set([
   'spam',
   'other',
 ]);
+const ASSIGNABLE_ROLES = new Set(['admin', 'member', 'adult', 'child', 'staff']);
+const GENERAL_ROLES = new Set(['member', 'adult', 'child', 'staff']);
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -978,7 +980,7 @@ export function createChatServer({
   function canModerateUser(actor, target) {
     if (!actor || !target || actor.id === target.id || target.role === 'owner') return false;
     if (actor.role === 'owner') return true;
-    return actor.role === 'admin' && target.role === 'member';
+    return actor.role === 'admin' && GENERAL_ROLES.has(target.role);
   }
 
   function isAccountBanned(user, now = Date.now()) {
@@ -1339,7 +1341,7 @@ export function createChatServer({
           return;
         }
         const userId = parseRoomId(parsed.userId);
-        if (!userId || !['admin', 'member'].includes(parsed.role)) {
+        if (!userId || !ASSIGNABLE_ROLES.has(parsed.role)) {
           sendError(ws, 'bad_role');
           return;
         }
