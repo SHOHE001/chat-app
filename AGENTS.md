@@ -26,11 +26,12 @@
 - `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` はサイト入口の共有認証であり、HTTP と WebSocket upgrade の両方を守る。
 - 2変数を両方設定すると有効、両方空なら無効、片方だけなら起動時エラーにする。
 - `BASIC_AUTH_USER` にコロンは使えない。パスワード内のコロンは使える。
-- アプリ内権限はアカウントの `owner` / `admin` / `member` に紐づける。旧 `ADMIN_PASSWORD` と `admin_auth` は使わない。
-- 最初の登録者はowner。ownerだけが他アカウントをadmin/memberへ変更でき、owner/adminがチャンネルを管理できる。
-- memberは自分のメッセージだけを編集・削除できる。owner/adminは通常チャンネル・独立スレッドの全投稿を操作できる。UIだけでなくWebSocket側で権限を強制する。
+- アプリ内権限はアカウントの `owner` / `admin` / 一般ロール（`member` / `adult` / `child` / `staff`）に紐づける。一般4ロールの通常権限は同一。旧 `ADMIN_PASSWORD` と `admin_auth` は使わない。
+- 最初の登録者はowner。ownerだけが他アカウントのロールを変更でき、owner/adminがチャンネルを管理できる。
+- owner/adminはチャンネル作成時に一般ロールの入室許可リストを設定できる。未選択は全員向け。owner/adminは常に入室でき、権限外利用者には一覧・直接入室・Web Pushのいずれからも内容を渡さない。作成後の許可リスト変更は未実装。
+- 一般ロールは自分のメッセージだけを編集・削除できる。owner/adminは通常チャンネル・独立スレッドの全投稿を操作できる。UIだけでなくWebSocket側で権限を強制する。
 - 認証済み利用者は全投稿を通報できる。対象投稿と前後2件ずつを通報時点で保全し、owner/adminだけが通報一覧を閲覧する。同一利用者・同一投稿の重複通報は禁止する。
-- adminはmemberを、ownerはadmin/memberをBAN・解除できる。本人とownerはBAN不可。期間は10分、1時間、24時間、7日、30日、永久で、BAN時は全セッション・通知購読を削除して接続中WebSocketも切断する。
+- adminは一般ロールを、ownerはadminと一般ロールをBAN・解除できる。本人とownerはBAN不可。期間は10分、1時間、24時間、7日、30日、永久で、BAN時は全セッション・通知購読を削除して接続中WebSocketも切断する。
 - owner/adminは5分間有効な招待トークン入り登録QRを生成・保存できる。手動更新すると旧QRは即時失効する。初回owner以外の新規登録は有効なQRを必須とし、旧匿名joinは通常運用で無効。生成APIもmemberを拒否し、外部QRサービスへURLを送らない。同じQRの5分以内の複数回利用は許可する。
 - Basic credential は厳密な Base64 検証後、SHA-256 digest の定数時間比較で照合する。
 - WebSocket は `WebSocketServer({ noServer: true })` と自前の `upgrade` ハンドラで認証する。HTTPだけを認証して
@@ -94,8 +95,8 @@ sudo tailscale funnel --https=443 off
 - PC: `shohei-pc`
 - スマホ: `shohei-mobile`
 
-アカウント、端末間の同時ログイン、ユーザー別権限、明示的ログアウト、全メッセージ対象のWeb Push通知は実装済み。
-通知は送信者と同じアカウントを除外するため、実機通知の確認にはPCとスマホで別アカウントを使う。未読管理、
+アカウント、端末間の同時ログイン、ユーザー別権限、明示的ログアウト、入室可能な全メッセージ対象のWeb Push通知は実装済み。
+通知は送信者と同じアカウントおよび入室権限のないアカウントを除外するため、実機通知の確認にはPCとスマホで別アカウントを使う。未読管理、
 メンション限定・チャンネル別通知、パスワード変更・再発行、レート制限は未実装であり、
 Rust版へ持ち込むかドッグフーディングで判断する。
 

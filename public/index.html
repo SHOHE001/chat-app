@@ -111,6 +111,16 @@
     <form id="create-room-form" class="dialog-form">
       <header><div><h2>チャンネルを作成</h2><p>admin以上の権限で管理できます。</p></div><button id="room-create-close" type="button" class="icon-button" aria-label="閉じる">×</button></header>
       <label>チャンネル名<input id="room-name-input" maxlength="32" required placeholder="新しいチャンネル"></label>
+      <fieldset class="room-access-fieldset">
+        <legend>入室できる一般ロール</legend>
+        <p>未選択なら全員。オーナーと管理者は常に入室できます。</p>
+        <div class="room-access-grid">
+          <label><input type="checkbox" name="room-access-role" value="member">メンバー</label>
+          <label><input type="checkbox" name="room-access-role" value="adult">大人</label>
+          <label><input type="checkbox" name="room-access-role" value="child">子供</label>
+          <label><input type="checkbox" name="room-access-role" value="staff">スタッフ</label>
+        </div>
+      </fieldset>
       <p id="room-create-error" class="form-error"></p>
       <footer><button id="room-create-cancel" type="button" class="secondary-button">キャンセル</button><button id="room-create-submit" type="submit" class="primary-button">作成</button></footer>
     </form>

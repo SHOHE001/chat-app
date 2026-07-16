@@ -453,11 +453,24 @@ export function createChatServer({
   fs.mkdirSync(uploadsDir, { recursive: true });
 
   /**
-   * DB のルーム一覧を WS プロトコルの形（{id, name}）に整形する。
+   * DB のルーム一覧を利用者ごとに絞り、WSプロトコルの形へ整形する。
    * created_at はクライアントに露出させない。
    */
-  function roomsPayload() {
-    return listRooms(db).map((room) => ({ id: room.id, name: room.name }));
+  function canAccessRoom(user, room) {
+    if (!room) return false;
+    if (!room.allowed_roles?.length) return true;
+    if (user && ['owner', 'admin'].includes(user.role)) return true;
+    return Boolean(user && room.allowed_roles.includes(user.role));
+  }
+
+  function roomsPayload(user) {
+    return listRooms(db)
+      .filter((room) => canAccessRoom(user, room))
+      .map((room) => ({
+        id: room.id,
+        name: room.name,
+        allowedRoles: room.allowed_roles,
+      }));
   }
 
   const server = http.createServer((req, res) => {
@@ -868,7 +881,7 @@ export function createChatServer({
     }
   }
 
-  function queuePushNotification({ excludeUserId, title, body, tag, url }) {
+  function queuePushNotification({ excludeUserId, roomId, title, body, tag, url }) {
     const task = (async () => {
       const payload = JSON.stringify({
         title,
@@ -876,7 +889,9 @@ export function createChatServer({
         tag,
         url,
       });
-      const subscriptions = listPushSubscriptions(db, excludeUserId);
+      const room = getRoomById(db, roomId);
+      const subscriptions = listPushSubscriptions(db, excludeUserId)
+        .filter((subscription) => canAccessRoom(subscription, room));
       await Promise.allSettled(
         subscriptions.map(async (subscription) => {
           try {
@@ -909,10 +924,9 @@ export function createChatServer({
   }
 
   function broadcastRooms() {
-    const payload = JSON.stringify({ type: 'rooms', rooms: roomsPayload() });
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(payload);
+        sendJson(client, { type: 'rooms', rooms: roomsPayload(client.user) });
       }
     }
   }
@@ -932,6 +946,19 @@ export function createChatServer({
         }
       }
       sendJson(client, { type: 'users', users });
+      if (client.user) {
+        const currentRoom = getRoomById(db, client.roomId);
+        if (!canAccessRoom(client.user, currentRoom)) {
+          client.roomId = defaultRoomId;
+          sendJson(client, {
+            type: 'room_switched',
+            roomId: defaultRoomId,
+            messages: getRecentMessages(db, defaultRoomId, HISTORY_LIMIT),
+            threads: threadsPayload(defaultRoomId),
+          });
+        }
+        sendJson(client, { type: 'rooms', rooms: roomsPayload(client.user) });
+      }
     }
   }
 
@@ -1127,7 +1154,7 @@ export function createChatServer({
           roomId: ws.roomId,
           messages: getRecentMessages(db, ws.roomId, HISTORY_LIMIT),
         });
-        sendJson(ws, { type: 'rooms', rooms: roomsPayload() });
+        sendJson(ws, { type: 'rooms', rooms: roomsPayload(ws.user) });
         return;
       }
 
@@ -1139,7 +1166,7 @@ export function createChatServer({
         sendJson(ws, {
           type: 'state',
           roomId: ws.roomId,
-          rooms: roomsPayload(),
+          rooms: roomsPayload(ws.user),
           messages: getRecentMessages(db, ws.roomId, HISTORY_LIMIT),
           threads: threadsPayload(ws.roomId),
           users: listAccounts(db),
@@ -1193,6 +1220,7 @@ export function createChatServer({
         const room = getRoomById(db, ws.roomId);
         queuePushNotification({
           excludeUserId: ws.user?.id ?? null,
+          roomId: ws.roomId,
           title: `#${room?.name || 'チャット'} · ${ws.user?.display_name || ws.nickname}`,
           body: pushBody(row.body, row.attachment),
           tag: `message-${row.id}`,
@@ -1468,8 +1496,21 @@ export function createChatServer({
           sendError(ws, 'bad_room_name');
           return;
         }
+        if (
+          parsed.allowedRoles !== undefined &&
+          (
+            !Array.isArray(parsed.allowedRoles) ||
+            parsed.allowedRoles.some((role) => !GENERAL_ROLES.has(role)) ||
+            new Set(parsed.allowedRoles).size !== parsed.allowedRoles.length
+          )
+        ) {
+          sendError(ws, 'bad_room_access');
+          return;
+        }
+        const allowedRoles = [...(parsed.allowedRoles || [])]
+          .sort((a, b) => [...GENERAL_ROLES].indexOf(a) - [...GENERAL_ROLES].indexOf(b));
         try {
-          createRoom(db, name);
+          createRoom(db, name, allowedRoles);
         } catch (err) {
           const isUniqueViolation =
             err.errcode === 2067 ||
@@ -1488,7 +1529,8 @@ export function createChatServer({
           return;
         }
         const targetRoomId = parseRoomId(parsed.roomId);
-        if (!targetRoomId || !getRoomById(db, targetRoomId)) {
+        const targetRoom = targetRoomId ? getRoomById(db, targetRoomId) : undefined;
+        if (!targetRoom || !canAccessRoom(ws.user, targetRoom)) {
           sendError(ws, 'room_not_found');
           return;
         }
@@ -1519,7 +1561,8 @@ export function createChatServer({
           return;
         }
         const targetRoomId = parseRoomId(parsed.roomId);
-        if (!targetRoomId || !getRoomById(db, targetRoomId)) {
+        const targetRoom = targetRoomId ? getRoomById(db, targetRoomId) : undefined;
+        if (!targetRoom || !canAccessRoom(ws.user, targetRoom)) {
           sendError(ws, 'room_not_found');
           return;
         }
@@ -1572,6 +1615,7 @@ export function createChatServer({
         broadcastThreads(ws.roomId);
         queuePushNotification({
           excludeUserId: ws.user.id,
+          roomId: ws.roomId,
           title: `新しいスレッド · ${ws.user.display_name || ws.user.username}`,
           body: body || title,
           tag: `thread-${thread.id}`,
@@ -1621,6 +1665,7 @@ export function createChatServer({
         broadcastThreads(ws.roomId);
         queuePushNotification({
           excludeUserId: ws.user.id,
+          roomId: ws.roomId,
           title: `${thread.title} · ${ws.user.display_name || ws.user.username}`,
           body,
           tag: `thread-message-${message.id}`,

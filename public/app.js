@@ -747,6 +747,7 @@
     forbidden: 'この操作を行う権限がありません。',
     room_exists: '同じ名前のチャンネルがあります。',
     bad_room_name: 'チャンネル名を確認してください。',
+    bad_room_access: '入室できるロールの指定を確認してください。',
     bad_thread_title: 'スレッドタイトルを1〜80文字で入力してください。',
     too_large: '送信内容が大きすぎます。',
     bad_attachment: '添付ファイルを利用できません。もう一度選択してください。',
@@ -820,6 +821,13 @@
       button.className = 'nav-select';
       button.innerHTML = '<span class="channel-icon">#</span>';
       button.append(document.createTextNode(room.name));
+      if (room.allowedRoles?.length) {
+        const lock = document.createElement('span');
+        lock.className = 'channel-lock';
+        lock.textContent = '🔒';
+        lock.title = '入室可能: ' + room.allowedRoles.join(', ');
+        button.append(lock);
+      }
       button.addEventListener('click', () => send('switch_room', { roomId: room.id }));
       item.append(button);
       if (canManage && room.id !== rooms[0]?.id) {
@@ -1867,7 +1875,9 @@
     event.preventDefault();
     const name = $('room-name-input').value.trim();
     if (!name) return;
-    if (send('create_room', { name })) closeCreateRoomDialog();
+    const allowedRoles = [...document.querySelectorAll('input[name="room-access-role"]:checked')]
+      .map((input) => input.value);
+    if (send('create_room', { name, allowedRoles })) closeCreateRoomDialog();
   });
   $('edit-message-form').addEventListener('submit', (event) => {
     event.preventDefault();

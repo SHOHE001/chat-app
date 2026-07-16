@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS rooms (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT UNIQUE NOT NULL,
+  allowed_roles TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS attachments (
@@ -160,11 +161,12 @@ export function openDb(path) {
   // user_version: 0=新規、1=旧メッセージ、2=メッセージスレッド、
   // 3=アカウント/リアクション/独立スレッド、4=添付ファイル、5=プロフィール、
   // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN、
-  // 9=通報スナップショットとAI審査状態、10=AI巡回・非表示・投稿停止。
+  // 9=通報スナップショットとAI審査状態、10=AI巡回・非表示・投稿停止、
+  // 11=ロール限定チャンネル。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 10');
-    userVersion = 10;
+    db.exec('PRAGMA user_version = 11');
+    userVersion = 11;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -408,6 +410,24 @@ export function openDb(path) {
       db.exec('PRAGMA user_version = 10');
       db.exec('COMMIT');
       userVersion = 10;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  if (userVersion === 10) {
+    const roomColumns = new Set(
+      db.prepare('PRAGMA table_info(rooms)').all().map((column) => column.name),
+    );
+    db.exec('BEGIN');
+    try {
+      if (!roomColumns.has('allowed_roles')) {
+        db.exec('ALTER TABLE rooms ADD COLUMN allowed_roles TEXT');
+      }
+      db.exec('PRAGMA user_version = 11');
+      db.exec('COMMIT');
+      userVersion = 11;
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
@@ -1441,14 +1461,20 @@ export function deletePushSubscriptionsForUser(db, userId) {
 
 export function listPushSubscriptions(db, excludeUserId = null) {
   const rows = excludeUserId === null
-    ? db.prepare('SELECT endpoint, user_id, p256dh, auth FROM push_subscriptions').all()
+    ? db.prepare(`
+        SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role
+        FROM push_subscriptions p JOIN users u ON u.id = p.user_id
+      `).all()
     : db
       .prepare(
-        'SELECT endpoint, user_id, p256dh, auth FROM push_subscriptions WHERE user_id != ?',
+        `SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role
+         FROM push_subscriptions p JOIN users u ON u.id = p.user_id
+         WHERE p.user_id != ?`,
       )
       .all(excludeUserId);
   return rows.map((row) => ({
     user_id: Number(row.user_id),
+    role: row.role,
     endpoint: row.endpoint,
     keys: { p256dh: row.p256dh, auth: row.auth },
   }));
@@ -1505,13 +1531,14 @@ export function getDefaultRoomId(db) {
 /**
  * ルーム一覧を id 昇順で返す。
  * @param {import('node:sqlite').DatabaseSync} db
- * @returns {{id: number, name: string, created_at: number}[]}
+ * @returns {{id: number, name: string, allowed_roles: string[], created_at: number}[]}
  */
 export function listRooms(db) {
-  const rows = db.prepare('SELECT id, name, created_at FROM rooms ORDER BY id ASC').all();
+  const rows = db.prepare('SELECT id, name, allowed_roles, created_at FROM rooms ORDER BY id ASC').all();
   return rows.map((row) => ({
     id: Number(row.id),
     name: row.name,
+    allowed_roles: row.allowed_roles ? JSON.parse(row.allowed_roles) : [],
     created_at: Number(row.created_at),
   }));
 }
@@ -1521,14 +1548,16 @@ export function listRooms(db) {
  * （呼び出し側で捕捉して room_exists に変換する）。
  * @param {import('node:sqlite').DatabaseSync} db
  * @param {string} name
+ * @param {string[]} allowedRoles
  */
-export function createRoom(db, name) {
+export function createRoom(db, name, allowedRoles = []) {
   const createdAt = Date.now();
-  const stmt = db.prepare('INSERT INTO rooms (name, created_at) VALUES (?, ?)');
-  const info = stmt.run(name, createdAt);
+  const stmt = db.prepare('INSERT INTO rooms (name, allowed_roles, created_at) VALUES (?, ?, ?)');
+  const info = stmt.run(name, allowedRoles.length ? JSON.stringify(allowedRoles) : null, createdAt);
   return {
     id: Number(info.lastInsertRowid),
     name,
+    allowed_roles: allowedRoles,
     created_at: createdAt,
   };
 }
@@ -1539,11 +1568,12 @@ export function createRoom(db, name) {
  * @param {number} roomId
  */
 export function getRoomById(db, roomId) {
-  const row = db.prepare('SELECT id, name, created_at FROM rooms WHERE id = ?').get(roomId);
+  const row = db.prepare('SELECT id, name, allowed_roles, created_at FROM rooms WHERE id = ?').get(roomId);
   if (!row) return undefined;
   return {
     id: Number(row.id),
     name: row.name,
+    allowed_roles: row.allowed_roles ? JSON.parse(row.allowed_roles) : [],
     created_at: Number(row.created_at),
   };
 }

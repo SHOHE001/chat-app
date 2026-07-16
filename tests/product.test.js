@@ -138,6 +138,7 @@ test('P02 roles: ownerがmemberをadminへ変更するとルーム管理権限�
     owner.send('set_role', { userId: memberAuth.user.id, role: 'admin' });
     const users = await roleUpdatePromise;
     assert.equal(users.users.find((user) => user.id === memberAuth.user.id).role, 'admin');
+    await member.next('rooms');
 
     const roomsPromise = member.next('rooms');
     member.send('create_room', { name: 'admin-room' });
@@ -663,6 +664,78 @@ test('P11 moderator hide: memberを拒否しadmin以上は投稿をDB保持の�
 
     owner.close();
     member.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});
+
+test('P12 restricted rooms: 指定ロールだけに表示・入室を許可し、権限喪失時は全体へ戻す', async () => {
+  const ctx = await startServer();
+  try {
+    const owner = createClient(ctx.url);
+    const adultSetup = createClient(ctx.url);
+    const childSetup = createClient(ctx.url);
+    await Promise.all([owner.open(), adultSetup.open(), childSetup.open()]);
+    const ownerAuth = await register(owner, 'room-owner');
+    const invite = await issueInvite(ctx, ownerAuth.sessionToken);
+    const adultAuth = await register(adultSetup, 'room-adult', 'password-123', invite);
+    const childAuth = await register(childSetup, 'room-child', 'password-123', invite);
+    adultSetup.close();
+    childSetup.close();
+    ctx.app.db.prepare('UPDATE users SET role = ? WHERE id = ?').run('adult', adultAuth.user.id);
+    ctx.app.db.prepare('UPDATE users SET role = ? WHERE id = ?').run('child', childAuth.user.id);
+
+    const adult = createClient(ctx.url);
+    const child = createClient(ctx.url);
+    await Promise.all([adult.open(), child.open()]);
+    const adultLogin = adult.next('auth_ok');
+    adult.send('login', { username: 'room-adult', password: 'password-123' });
+    assert.equal((await adultLogin).user.role, 'adult');
+    const childLogin = child.next('auth_ok');
+    child.send('login', { username: 'room-child', password: 'password-123' });
+    assert.equal((await childLogin).user.role, 'child');
+
+    for (const allowedRoles of [['owner'], ['adult', 'adult'], 'adult']) {
+      const invalid = owner.next('error');
+      owner.send('create_room', { name: 'invalid-room', allowedRoles });
+      assert.equal((await invalid).reason, 'bad_room_access');
+    }
+
+    const ownerRooms = owner.next('rooms');
+    const adultRooms = adult.next('rooms');
+    const childRooms = child.next('rooms');
+    owner.send('create_room', { name: '大人限定', allowedRoles: ['adult'] });
+    const ownerRestricted = (await ownerRooms).rooms.find((room) => room.name === '大人限定');
+    const adultRestricted = (await adultRooms).rooms.find((room) => room.name === '大人限定');
+    assert.deepEqual(ownerRestricted.allowedRoles, ['adult']);
+    assert.equal(adultRestricted.id, ownerRestricted.id);
+    assert.equal((await childRooms).rooms.some((room) => room.id === ownerRestricted.id), false);
+
+    const denied = child.next('error');
+    child.send('switch_room', { roomId: ownerRestricted.id });
+    assert.equal((await denied).reason, 'room_not_found');
+
+    const switched = adult.next('room_switched');
+    adult.send('switch_room', { roomId: ownerRestricted.id });
+    assert.equal((await switched).roomId, ownerRestricted.id);
+
+    const usersChanged = adult.next('users');
+    const evicted = adult.next('room_switched');
+    const restrictedListRemoved = adult.next('rooms');
+    owner.send('set_role', { userId: adultAuth.user.id, role: 'child' });
+    assert.equal(
+      (await usersChanged).users.find((user) => user.id === adultAuth.user.id).role,
+      'child',
+    );
+    assert.notEqual((await evicted).roomId, ownerRestricted.id);
+    assert.equal(
+      (await restrictedListRemoved).rooms.some((room) => room.id === ownerRestricted.id),
+      false,
+    );
+
+    owner.close();
+    adult.close();
+    child.close();
   } finally {
     await stopServer(ctx);
   }

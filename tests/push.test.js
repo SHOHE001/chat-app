@@ -212,3 +212,52 @@ test('PUSH02 delivery: 送信者を除外して配送し、期限切れ購読を
     await stopServer(ctx);
   }
 });
+
+test('PUSH03 restricted rooms: 入室権限のない購読者へ本文を配送しない', async () => {
+  const ctx = await startServer();
+  try {
+    const owner = await createClient(ctx.wsUrl);
+    const adult = await createClient(ctx.wsUrl);
+    const child = await createClient(ctx.wsUrl);
+    const ownerAuth = await register(owner, 'restricted-owner');
+    const invite = await issueInvite(ctx, ownerAuth.sessionToken);
+    const adultAuth = await register(adult, 'restricted-adult', invite);
+    const childAuth = await register(child, 'restricted-child', invite);
+    ctx.app.db.prepare('UPDATE users SET role = ? WHERE id = ?').run('adult', adultAuth.user.id);
+    ctx.app.db.prepare('UPDATE users SET role = ? WHERE id = ?').run('child', childAuth.user.id);
+    await pushApi(ctx, '/api/push/subscription', adultAuth.sessionToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        ...subscription,
+        endpoint: 'https://push.example.test/adult',
+      }),
+    });
+    await pushApi(ctx, '/api/push/subscription', childAuth.sessionToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        ...subscription,
+        endpoint: 'https://push.example.test/child',
+      }),
+    });
+
+    const rooms = owner.next('rooms');
+    owner.send('create_room', { name: '大人限定通知', allowedRoles: ['adult'] });
+    const room = (await rooms).rooms.find((item) => item.name === '大人限定通知');
+    const switched = owner.next('room_switched');
+    owner.send('switch_room', { roomId: room.id });
+    await switched;
+    const broadcast = owner.next('message');
+    owner.send('message', { body: '限定チャンネルの本文' });
+    await broadcast;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.equal(ctx.pushTransport.calls.length, 1);
+    assert.equal(ctx.pushTransport.calls[0].subscription.endpoint, 'https://push.example.test/adult');
+    assert.equal(ctx.pushTransport.calls[0].payload.body, '限定チャンネルの本文');
+    owner.ws.close();
+    adult.ws.close();
+    child.ws.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});
