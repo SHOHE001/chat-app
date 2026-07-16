@@ -5,12 +5,34 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=__INSTALL_DIR__
-EnvironmentFile=-__INSTALL_DIR__/.env
-Environment=HOME=__CLAUDE_HOME__
-Environment=PATH=__CLAUDE_HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=__NODE_BIN__ src/moderation-worker.js
+User=shohei
+Group=shohei
+SupplementaryGroups=chat-app
+WorkingDirectory=/opt/chat-app/current
+EnvironmentFile=/etc/chat-app/chat-app.env
+Environment=HOME=/home/shohei
+Environment=PATH=/home/shohei/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node src/moderation-worker.js
+UMask=0007
+
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
-ReadWritePaths=__INSTALL_DIR__/data __CLAUDE_HOME__/.claude
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/chat-app /home/shohei/.claude
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=

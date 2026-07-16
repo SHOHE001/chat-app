@@ -6,12 +6,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, stat, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { resolveConfig, createChatServer } from '../src/server.js';
+const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -165,5 +168,99 @@ test('T06 旧admin_authはADMIN_PASSWORDの有無にかかわらず無効', asyn
     await closeClient(client);
   } finally {
     await stopServer(ctxEnabled);
+  }
+});
+
+test('T07 systemd: Webは専用ユーザーと主要hardening、巡回は補助グループを使う', async () => {
+  const deployDir = path.join(__dirname, '..', 'deploy');
+  const webUnit = await readFile(path.join(deployDir, 'chat-app.service'), 'utf8');
+  for (const expected of [
+    'User=chat-app',
+    'Group=chat-app',
+    'WorkingDirectory=/opt/chat-app/current',
+    'EnvironmentFile=/etc/chat-app/chat-app.env',
+    'ProtectSystem=strict',
+    'ProtectHome=true',
+    'NoNewPrivileges=true',
+    'PrivateTmp=true',
+    'PrivateDevices=true',
+    'ReadWritePaths=/var/lib/chat-app',
+    'CapabilityBoundingSet=',
+    'AmbientCapabilities=',
+    'UMask=0007',
+  ]) {
+    assert.ok(webUnit.split('\n').includes(expected), `missing systemd setting: ${expected}`);
+  }
+  assert.doesNotMatch(webUnit, /__INSTALL_DIR__|EnvironmentFile=-/);
+
+  const moderationUnit = await readFile(
+    path.join(deployDir, 'chat-app-moderation.service'),
+    'utf8',
+  );
+  assert.match(moderationUnit, /^User=shohei$/m);
+  assert.match(moderationUnit, /^SupplementaryGroups=chat-app$/m);
+  assert.match(moderationUnit, /^ReadWritePaths=\/var\/lib\/chat-app \/home\/shohei\/\.claude$/m);
+  assert.match(moderationUnit, /^ProtectHome=read-only$/m);
+});
+
+test('T08 deploy scripts: 構文、commit archive、atomic symlink、rollbackを備える', async () => {
+  const deployDir = path.join(__dirname, '..', 'deploy');
+  const scripts = ['release.sh', 'rollback.sh', 'migrate-state.sh', 'migrate-gen8.sh'];
+  for (const script of scripts) {
+    await execFileAsync('bash', ['-n', path.join(deployDir, script)]);
+  }
+  const release = await readFile(path.join(deployDir, 'release.sh'), 'utf8');
+  assert.match(release, /git_cmd=.*safe\.directory/);
+  assert.match(release, /archive --format=tar/);
+  assert.match(release, /npm ci --omit=dev --ignore-scripts/);
+  assert.match(release, /mv -Tf .*current/);
+  assert.match(release, /restored previous release/);
+});
+
+test('T09 migration: 一時rootへDB・添付・env・backupを作り、Basic秘密を一度生成する', async () => {
+  const temporaryRoot = await mkdtemp(path.join(process.env.TMPDIR || '/tmp', 'chat-app-migration-'));
+  const oldDir = path.join(temporaryRoot, 'old');
+  const destinationRoot = path.join(temporaryRoot, 'destination');
+  const oldUploads = path.join(oldDir, 'uploads');
+  await mkdir(oldUploads, { recursive: true });
+  const oldEnv = path.join(oldDir, '.env');
+  const oldDb = path.join(oldDir, 'chat.db');
+  const originalEnv = [
+    'PORT=3002',
+    'HOST=127.0.0.1',
+    'DB_PATH=data/chat.db',
+    'BASIC_AUTH_USER=',
+    'BASIC_AUTH_PASSWORD=',
+    'VAPID_SUBJECT=mailto:test@example.com',
+    '',
+  ].join('\n');
+  await writeFile(oldEnv, originalEnv, { mode: 0o600 });
+  await writeFile(oldDb, 'sqlite-data');
+  await writeFile(path.join(oldUploads, 'file.bin'), 'upload-data');
+  try {
+    const script = path.join(__dirname, '..', 'deploy', 'migrate-state.sh');
+    const { stdout } = await execFileAsync(
+      script,
+      [oldEnv, oldDb, oldUploads, destinationRoot],
+      { env: { ...process.env, MIGRATION_TIMESTAMP: '20260716T120000Z' } },
+    );
+    assert.match(stdout, /Basic auth credential \(shown once\): chat:[0-9a-f]{32}/);
+    const migratedEnvPath = path.join(destinationRoot, 'etc/chat-app/chat-app.env');
+    const migratedEnv = await readFile(migratedEnvPath, 'utf8');
+    assert.match(migratedEnv, /^PORT=3002$/m);
+    assert.match(migratedEnv, /^HOST=127\.0\.0\.1$/m);
+    assert.match(migratedEnv, /^DB_PATH=\/var\/lib\/chat-app\/chat\.db$/m);
+    assert.match(migratedEnv, /^BASIC_AUTH_USER=chat$/m);
+    assert.match(migratedEnv, /^BASIC_AUTH_PASSWORD=[0-9a-f]{32}$/m);
+    assert.equal((await stat(migratedEnvPath)).mode & 0o777, 0o640);
+    assert.equal(await readFile(path.join(destinationRoot, 'var/lib/chat-app/chat.db'), 'utf8'), 'sqlite-data');
+    assert.equal(await readFile(path.join(destinationRoot, 'var/lib/chat-app/uploads/file.bin'), 'utf8'), 'upload-data');
+    assert.equal(
+      await readFile(path.join(destinationRoot, 'var/backups/chat-app/20260716T120000Z/chat.db'), 'utf8'),
+      'sqlite-data',
+    );
+    assert.equal(await readFile(oldEnv, 'utf8'), originalEnv);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
   }
 });

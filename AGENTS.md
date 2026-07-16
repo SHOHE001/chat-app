@@ -14,10 +14,13 @@
 - Node.js `>=22.22.3`。依存は `ws`、`web-push`、サーバー側PNG生成用の`qrcode`で、フロントエンドはビルドレス。
 - `src/server.js` が同一ポートで静的ファイルと WebSocket を提供する。
 - SQLite は `node:sqlite` を使い、アカウント、プロフィール、セッション、チャンネル、メッセージ、リアクション、独立スレッド、添付メタデータ、通報スナップショットを保持する。
-- 添付本体は`DB_PATH`と同階層の`uploads/`へ保存する。上限100MB、1メッセージ1件で、画像・動画・一般ファイルを扱う。
+- 添付本体は`DB_PATH`と同階層の`uploads/`へ保存する。上限100MB、1メッセージ1件。JPEG/PNG/GIF/WebP/AVIFと
+  MP4/WebM/QuickTimeだけをinline配信し、HTML、SVG、その他はoctet-stream＋attachmentにする。アバターも安全な
+  ラスター画像だけを許可する。
 - `public/` は素の HTML/CSS/JavaScript。HTTPS 配下ではクライアントが自動的に `wss:` を使う。
 - Web Push購読と永続VAPID鍵をSQLiteへ保存し、Service WorkerとWeb App Manifestでモバイル通知を試作している。
-- gen8 では `chat-app.service` により systemd 常駐する。
+- gen8では`chat-app.service`により常駐する。公開安全化後の標準配置はコード`/opt/chat-app/current`、状態
+  `/var/lib/chat-app`、秘密設定`/etc/chat-app/chat-app.env`で、Webは専用`chat-app`ユーザー、AI巡回は`shohei`で動かす。
 - 詳細なセットアップと運用手順は `README.md`、Basic 認証実装の判断は
   `features/basic-auth-funnel-plan.md` を参照する。
 
@@ -37,6 +40,10 @@
 - Basic credential は厳密な Base64 検証後、SHA-256 digest の定数時間比較で照合する。
 - WebSocket は `WebSocketServer({ noServer: true })` と自前の `upgrade` ハンドラで認証する。HTTPだけを認証して
   WebSocketを迂回可能に戻してはいけない。
+- Basic失敗は接続元ごとに10分10回、アプリログイン失敗はユーザー名＋接続元ごとに15分5回で15分停止する。
+  全体は毎分300失敗を上限とし、HTTP/upgradeは429、アプリは`rate_limited`と`retry_after_ms`を返す。
+- 全HTTP応答にCSP、`nosniff`、`no-referrer`、frame拒否を付ける。Funnelからloopback経由の場合だけ
+  `X-Forwarded-For`右端の妥当なIPを接続元に使う。レート制限は最大10,000件のインメモリで再起動時に消える。
 
 公開運用の現状:
 
@@ -45,8 +52,9 @@
 - Funnel: 公開443番から `http://127.0.0.1:3002` へ転送し、`--bg` で永続化
 - systemd: `chat-app.service` は enabled / active
 
-`.env` は Git 対象外かつ権限600で運用する。実パスワード、セッショントークン、DB内データをコード、Issue、ログ、
-`AGENTS.md`、READMEへ書かない。秘密値を確認するときも値そのものを出力せず、設定済みかだけを表示する。
+開発用`.env`はGit対象外・600、公開用`/etc/chat-app/chat-app.env`は`root:chat-app 0640`で運用する。
+実パスワード、セッショントークン、DB内データをコード、Issue、ログ、`AGENTS.md`、READMEへ書かない。
+初回移行で生成するBasicパスワードは端末へ一度だけ表示し、以後は値そのものではなく設定済みかだけを確認する。
 
 運用確認:
 
@@ -68,7 +76,10 @@ sudo tailscale funnel --https=443 off
 - 通常の検証は `npm test`。アカウント・UI機能追加後も既存回帰を含む全テスト成功を必須とする。
 - 認証変更では、HTTPの401/200だけでなく、WebSocketの401/101、join、履歴、メッセージ送受信までテストする。
 - 新しい環境変数を追加したら、`resolveConfig`、`.env.example`、README、設定境界テストを同時に更新する。
-- テスト済みの通常変更は、AIが影響とロールバック可能性を判断し、GitHubへのpush後に`chat-app.service`を再起動して公開環境へ反映してよい。毎回の個別承認は不要とする。
+- 標準配置への移行後、テスト済みの通常変更はGitHubへのpush後に
+  `sudo deploy/release.sh /home/shohei/プロジェクト/chat-app`でcommit単位のreleaseを作って反映する。
+  単純なservice再起動だけでは`/opt/chat-app/current`のコードは更新されない。失敗時は旧symlinkへ自動復旧し、
+  手動時は`deploy/rollback.sh <sha>`を使う。
 - `.env`の秘密値変更、DBの破壊的移行、Funnelの公開先・公開範囲変更、データ削除、停止を伴う長時間メンテナンスは通常反映に含めず、実行前にユーザーへ確認する。
 - AI巡回はユーザーが2026-07-16に明示承認済み。3時間ごとのHaiku一次確認、候補と通報のOpus最終確認、30日内3件で投稿停止、owner/admin解除を通常運用としてよい。モデル、送信範囲、費用上限、実行間隔を広げる変更は再確認する。
 - Funnel公開前後は `HOST=127.0.0.1` を維持し、LANへアプリの生ポートを公開しない。
@@ -98,7 +109,7 @@ sudo tailscale funnel --https=443 off
 
 アカウント、端末間の同時ログイン、ユーザー別権限、明示的ログアウト、入室可能な全メッセージ対象のWeb Push通知は実装済み。
 通知は送信者と同じアカウントおよび入室権限のないアカウントを除外するため、実機通知の確認にはPCとスマホで別アカウントを使う。未読管理、
-メンション限定・チャンネル別通知、パスワード変更・再発行、レート制限は未実装であり、
+メンション限定通知、パスワード変更・再発行は未実装であり、
 Rust版へ持ち込むかドッグフーディングで判断する。
 
 優先して確認する項目:
@@ -121,9 +132,19 @@ Rust版へ持ち込むかドッグフーディングで判断する。
 気づいた内容は、まず事実と再現手順を残し、GitHub Issueへ「不具合」「UX改善」「新機能」「Rust版でのみ対応」に
 分類する。モック段階では、観測した不便をすぐ大規模実装へ変換しない。
 
-## Rust再構築フェーズへの入口
+## 大人限定公開と延期項目
+
+現在の公開対象は信頼できる大人の少人数だけとし、子どもはまだ参加させない。添付ACL、EXIF除去、保存期間・孤児清掃、
+owner冗長化、子どもの初期ロール固定、初回owner自動付与廃止、子ども向け通知本文制御、1回限りの招待、監査ログは
+GitHub IssueとRust版必須要件へ残す。`features/child-safety-plan.md`の最優先項目が満たされるまで子ども公開は禁止する。
+
+HTML/SVGを含む一般ファイルのアップロード自体は許可するが、inline表示やアバター利用は許可しない。添付URLは現状
+capability URLであり、チャンネル権限やBAN状態との再認証は未実装。通常の`<img>`/`<video>`では
+`X-Session-Token`を付与できないため、Rust版ではHttpOnly Cookie、署名URL、別オリジンのいずれかで設計する。
 
 Rust実装を始める前に、ドッグフーディングで集めたIssueを整理し、少なくとも次を決定する。
+## Rust再構築フェーズへの入口
+
 
 - Node版で試したアカウント・権限モデルをRust版へどう移植するか
 - HTTP/WebSocketの公開プロトコルとエラー形式

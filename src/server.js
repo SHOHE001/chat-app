@@ -236,7 +236,11 @@ function createFailureLimiter({ windowMs, maxFailures, blockMs, maxEntries, now 
     const currentTime = now();
     prune(currentTime);
     let entry = entries.get(key);
-    if (!entry || entry.windowStartedAt + windowMs <= currentTime) {
+    if (
+      !entry ||
+      entry.windowStartedAt + windowMs <= currentTime ||
+      (entry.blockedUntil > 0 && entry.blockedUntil <= currentTime)
+    ) {
       entry = { failures: 0, windowStartedAt: currentTime, blockedUntil: 0 };
     }
     entry.failures += 1;

@@ -1,17 +1,43 @@
 [Unit]
-Description=chat-app (question chat MVP)
+Description=chat-app realtime chat prototype
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-# __INSTALL_DIR__ / __NODE_BIN__ は README の手順で実値に置換する
-WorkingDirectory=__INSTALL_DIR__
-# 先頭 '-' で .env 欠損時も起動失敗しない（存在すれば env を注入）
-EnvironmentFile=-__INSTALL_DIR__/.env
-ExecStart=__NODE_BIN__ src/server.js
+User=chat-app
+Group=chat-app
+WorkingDirectory=/opt/chat-app/current
+EnvironmentFile=/etc/chat-app/chat-app.env
+ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=3
+UMask=0007
+
+StateDirectory=chat-app
+StateDirectoryMode=0770
+ReadWritePaths=/var/lib/chat-app
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target

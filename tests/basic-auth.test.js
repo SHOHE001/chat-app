@@ -332,3 +332,40 @@ test('B35-B38 app login rate limit: 閾値、retry_after_ms、成功解除', asy
     await stopServer(ctx);
   }
 });
+
+test('B39-B41 global auth limit: 異なるキーを合算し、全接続を止め、期限後に解除する', async () => {
+  let currentTime = 20_000;
+  const ctx = await startServer({
+    now: () => currentTime,
+    rateLimits: {
+      appLogin: { windowMs: 10_000, maxFailures: 100, blockMs: 5_000 },
+      global: { windowMs: 10_000, maxFailures: 2, blockMs: 5_000 },
+      maxEntries: 10,
+    },
+  });
+  try {
+    const first = new WebSocket(ctx.wsUrl, { headers: { 'X-Forwarded-For': '198.51.100.60' } });
+    await waitForOpen(first);
+    let response = waitForType(first, 'error');
+    first.send(JSON.stringify({ type: 'login', username: 'unknown-a', password: 'wrong-pass' }));
+    assert.equal((await response).reason, 'bad_credentials');
+    response = waitForType(first, 'error');
+    first.send(JSON.stringify({ type: 'login', username: 'unknown-b', password: 'wrong-pass' }));
+    assert.equal((await response).reason, 'rate_limited');
+
+    const second = new WebSocket(ctx.wsUrl, { headers: { 'X-Forwarded-For': '203.0.113.61' } });
+    await waitForOpen(second);
+    response = waitForType(second, 'error');
+    second.send(JSON.stringify({ type: 'login', username: 'unknown-c', password: 'wrong-pass' }));
+    assert.equal((await response).reason, 'rate_limited');
+
+    currentTime += 6_000;
+    response = waitForType(second, 'error');
+    second.send(JSON.stringify({ type: 'login', username: 'unknown-c', password: 'wrong-pass' }));
+    assert.equal((await response).reason, 'bad_credentials');
+    first.close();
+    second.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});
