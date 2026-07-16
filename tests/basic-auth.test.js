@@ -16,9 +16,9 @@ function authHeader(user, password, scheme = 'Basic') {
   return `${scheme} ${Buffer.from(`${user}:${password}`, 'utf8').toString('base64')}`;
 }
 
-async function startServer({ basicAuth } = {}) {
+async function startServer({ basicAuth, now, rateLimits } = {}) {
   const dbPath = tmpDbPath();
-  const app = createChatServer({ dbPath, staticDir: 'public', basicAuth, allowLegacyJoin: true });
+  const app = createChatServer({ dbPath, staticDir: 'public', basicAuth, allowLegacyJoin: true, now, rateLimits });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   const port = app.server.address().port;
   return {
@@ -131,6 +131,16 @@ test('B10-B13 HTTP: 無効時は200、有効時は401/正しいcredentialで200'
     assert.equal(unauthorized.status, 401);
     assert.equal(unauthorized.headers.get('www-authenticate'), 'Basic realm="chat", charset="UTF-8"');
 
+    for (const name of ['content-security-policy', 'x-content-type-options', 'referrer-policy', 'x-frame-options']) {
+      assert.ok(unauthorized.headers.get(name), `401に${name}が必要`);
+    }
+
+    const authorized = await fetch(`${enabled.httpUrl}/`, {
+      headers: { Authorization: authHeader('user', 'pass') },
+    });
+    assert.equal(authorized.headers.get('x-content-type-options'), 'nosniff');
+    assert.match(authorized.headers.get('content-security-policy'), /object-src 'none'/);
+
     for (const value of [authHeader('wrong', 'pass'), authHeader('user', 'wrong')]) {
       assert.equal((await fetch(`${enabled.httpUrl}/`, { headers: { Authorization: value } })).status, 401);
     }
@@ -227,6 +237,97 @@ test('B24 HTTP/WS: 同一credentialでHTTP取得後にチャット送受信で�
     assert.equal(message.message.body, 'Basic認証越しのメッセージ');
     alice.close();
     bob.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});
+
+test('B30-B34 Basic rate limit: HTTP/WSの429、接続元分離、成功・時間経過で解除', async () => {
+  let currentTime = 1_000;
+  const ctx = await startServer({
+    basicAuth: { user: 'user', password: 'pass' },
+    now: () => currentTime,
+    rateLimits: {
+      basicAuth: { windowMs: 10_000, maxFailures: 2, blockMs: 5_000 },
+      global: { windowMs: 10_000, maxFailures: 100, blockMs: 5_000 },
+      maxEntries: 10,
+    },
+  });
+  try {
+    const wrong = authHeader('user', 'wrong');
+    const first = await fetch(`${ctx.httpUrl}/`, {
+      headers: { Authorization: wrong, 'X-Forwarded-For': '198.51.100.10' },
+    });
+    assert.equal(first.status, 401);
+    const second = await fetch(`${ctx.httpUrl}/`, {
+      headers: { Authorization: wrong, 'X-Forwarded-For': '198.51.100.10' },
+    });
+    assert.equal(second.status, 429);
+    assert.equal(second.headers.get('retry-after'), '5');
+
+    const separateSource = await fetch(`${ctx.httpUrl}/`, {
+      headers: { Authorization: wrong, 'X-Forwarded-For': '203.0.113.20' },
+    });
+    assert.equal(separateSource.status, 401);
+
+    const valid = await fetch(`${ctx.httpUrl}/`, {
+      headers: { Authorization: authHeader('user', 'pass'), 'X-Forwarded-For': '198.51.100.10' },
+    });
+    assert.equal(valid.status, 200);
+    const afterSuccess = await fetch(`${ctx.httpUrl}/`, {
+      headers: { Authorization: wrong, 'X-Forwarded-For': '198.51.100.10' },
+    });
+    assert.equal(afterSuccess.status, 401);
+
+    currentTime += 6_000;
+    await expectWsStatus(
+      ctx.wsUrl,
+      { Authorization: wrong, 'X-Forwarded-For': '192.0.2.30' },
+      401,
+    );
+    await expectWsStatus(
+      ctx.wsUrl,
+      { Authorization: wrong, 'X-Forwarded-For': '192.0.2.30' },
+      429,
+    );
+  } finally {
+    await stopServer(ctx);
+  }
+});
+
+test('B35-B38 app login rate limit: 閾値、retry_after_ms、成功解除', async () => {
+  let currentTime = 10_000;
+  const ctx = await startServer({
+    now: () => currentTime,
+    rateLimits: {
+      appLogin: { windowMs: 10_000, maxFailures: 2, blockMs: 5_000 },
+      global: { windowMs: 10_000, maxFailures: 100, blockMs: 5_000 },
+      maxEntries: 10,
+    },
+  });
+  try {
+    const ws = new WebSocket(ctx.wsUrl, { headers: { 'X-Forwarded-For': '198.51.100.50' } });
+    await waitForOpen(ws);
+    let response = waitForType(ws, 'auth_ok');
+    ws.send(JSON.stringify({ type: 'register', username: 'owner', password: 'password-123' }));
+    await response;
+
+    response = waitForType(ws, 'error');
+    ws.send(JSON.stringify({ type: 'login', username: 'owner', password: 'wrong-pass' }));
+    assert.equal((await response).reason, 'bad_credentials');
+    response = waitForType(ws, 'error');
+    ws.send(JSON.stringify({ type: 'login', username: 'owner', password: 'wrong-pass' }));
+    const limited = await response;
+    assert.equal(limited.reason, 'rate_limited');
+    assert.equal(limited.retry_after_ms, 5_000);
+
+    response = waitForType(ws, 'auth_ok');
+    ws.send(JSON.stringify({ type: 'login', username: 'owner', password: 'password-123' }));
+    await response;
+    response = waitForType(ws, 'error');
+    ws.send(JSON.stringify({ type: 'login', username: 'owner', password: 'wrong-pass' }));
+    assert.equal((await response).reason, 'bad_credentials');
+    ws.close();
   } finally {
     await stopServer(ctx);
   }

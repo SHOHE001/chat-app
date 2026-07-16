@@ -7,6 +7,7 @@ import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush from 'web-push';
@@ -100,6 +101,44 @@ const REPORT_CATEGORIES = new Set([
 const ASSIGNABLE_ROLES = new Set(['admin', 'member', 'adult', 'child', 'staff']);
 const GENERAL_ROLES = new Set(['member', 'adult', 'child', 'staff']);
 
+const SAFE_RASTER_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+]);
+const SAFE_INLINE_MIME_TYPES = new Set([
+  ...SAFE_RASTER_MIME_TYPES,
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+]);
+const SECURITY_HEADERS = Object.freeze({
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob:",
+    "connect-src 'self' ws: wss:",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "form-action 'self'",
+  ].join('; '),
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+});
+const DEFAULT_RATE_LIMITS = Object.freeze({
+  appLogin: { windowMs: 15 * 60 * 1000, maxFailures: 5, blockMs: 15 * 60 * 1000 },
+  basicAuth: { windowMs: 10 * 60 * 1000, maxFailures: 10, blockMs: 15 * 60 * 1000 },
+  global: { windowMs: 60 * 1000, maxFailures: 300, blockMs: 60 * 1000 },
+  maxEntries: 10_000,
+});
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -135,6 +174,10 @@ function getMimeType(filePath) {
   return MIME_TYPES[ext] || 'application/octet-stream';
 }
 
+function applySecurityHeaders(res) {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+}
+
 function sendStatus(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(body);
@@ -146,6 +189,69 @@ function sendUnauthorized(res) {
     'WWW-Authenticate': 'Basic realm="chat", charset="UTF-8"',
   });
   res.end('Unauthorized');
+}
+
+function sendRateLimited(res, retryAfterMs) {
+  const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  res.writeHead(429, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Retry-After': String(retryAfterSeconds),
+  });
+  res.end('Too Many Requests');
+}
+
+function isLoopbackAddress(address) {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function requestClientKey(req) {
+  const remoteAddress = req.socket?.remoteAddress || 'unknown';
+  if (!isLoopbackAddress(remoteAddress)) return remoteAddress;
+  const forwarded = req.headers['x-forwarded-for'];
+  const raw = Array.isArray(forwarded) ? forwarded.at(-1) : forwarded;
+  if (typeof raw !== 'string') return remoteAddress;
+  const candidate = raw.split(',').at(-1)?.trim();
+  return candidate && net.isIP(candidate) ? candidate : remoteAddress;
+}
+
+function createFailureLimiter({ windowMs, maxFailures, blockMs, maxEntries, now }) {
+  const entries = new Map();
+
+  function prune(currentTime) {
+    for (const [key, entry] of entries) {
+      if (entry.blockedUntil <= currentTime && entry.windowStartedAt + windowMs <= currentTime) {
+        entries.delete(key);
+      }
+    }
+  }
+
+  function retryAfterMs(key) {
+    const currentTime = now();
+    const entry = entries.get(key);
+    if (!entry || entry.blockedUntil <= currentTime) return 0;
+    return entry.blockedUntil - currentTime;
+  }
+
+  function recordFailure(key) {
+    const currentTime = now();
+    prune(currentTime);
+    let entry = entries.get(key);
+    if (!entry || entry.windowStartedAt + windowMs <= currentTime) {
+      entry = { failures: 0, windowStartedAt: currentTime, blockedUntil: 0 };
+    }
+    entry.failures += 1;
+    if (entry.failures >= maxFailures) entry.blockedUntil = currentTime + blockMs;
+    entries.delete(key);
+    entries.set(key, entry);
+    while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
+    return Math.max(0, entry.blockedUntil - currentTime);
+  }
+
+  function clear(key) {
+    entries.delete(key);
+  }
+
+  return { retryAfterMs, recordFailure, clear };
 }
 
 /**
@@ -433,6 +539,8 @@ export function createChatServer({
   pushTransport = webpush,
   qrEncoder = QRCode,
   allowLegacyJoin = false,
+  now = Date.now,
+  rateLimits = DEFAULT_RATE_LIMITS,
 }) {
   assertBasicAuthConfig(basicAuth);
   const root = path.resolve(staticDir);
@@ -453,6 +561,25 @@ export function createChatServer({
   const defaultRoomId = getDefaultRoomId(db);
   const uploadsDir = path.resolve(path.dirname(dbPath), 'uploads');
   fs.mkdirSync(uploadsDir, { recursive: true });
+  const maxRateLimitEntries = rateLimits.maxEntries ?? DEFAULT_RATE_LIMITS.maxEntries;
+  const appLoginLimiter = createFailureLimiter({
+    ...DEFAULT_RATE_LIMITS.appLogin,
+    ...rateLimits.appLogin,
+    maxEntries: maxRateLimitEntries,
+    now,
+  });
+  const basicAuthLimiter = createFailureLimiter({
+    ...DEFAULT_RATE_LIMITS.basicAuth,
+    ...rateLimits.basicAuth,
+    maxEntries: maxRateLimitEntries,
+    now,
+  });
+  const globalAuthLimiter = createFailureLimiter({
+    ...DEFAULT_RATE_LIMITS.global,
+    ...rateLimits.global,
+    maxEntries: 1,
+    now,
+  });
 
   /**
    * DB のルーム一覧を利用者ごとに絞り、WSプロトコルの形へ整形する。
@@ -480,9 +607,25 @@ export function createChatServer({
   }
 
   const server = http.createServer((req, res) => {
-    if (!checkBasicAuth(req.headers.authorization, basicAuth)) {
-      sendUnauthorized(res);
+    applySecurityHeaders(res);
+    const clientKey = requestClientKey(req);
+    const basicAuthOk = checkBasicAuth(req.headers.authorization, basicAuth);
+    if (basicAuth && !basicAuthOk) {
+      const existingRetry = Math.max(
+        globalAuthLimiter.retryAfterMs('global'),
+        basicAuthLimiter.retryAfterMs(clientKey),
+      );
+      const retryAfterMs = existingRetry || Math.max(
+        globalAuthLimiter.recordFailure('global'),
+        basicAuthLimiter.recordFailure(clientKey),
+      );
+      if (retryAfterMs) sendRateLimited(res, retryAfterMs);
+      else sendUnauthorized(res);
       return;
+    }
+    if (basicAuth) {
+      basicAuthLimiter.clear(clientKey);
+      globalAuthLimiter.clear('global');
     }
     let requestUrl;
     try {
@@ -734,7 +877,11 @@ export function createChatServer({
       sendApiError(res, 400, 'bad_file_name');
       return;
     }
-    const mimeType = String(req.headers['content-type'] || 'application/octet-stream').slice(0, 120);
+    const mimeType = String(req.headers['content-type'] || 'application/octet-stream')
+      .split(';', 1)[0]
+      .trim()
+      .toLowerCase()
+      .slice(0, 120) || 'application/octet-stream';
     const id = crypto.randomBytes(18).toString('base64url');
     const storedName = `${id}.bin`;
     const temporaryPath = path.join(uploadsDir, `${storedName}.part`);
@@ -776,8 +923,7 @@ export function createChatServer({
           size,
         });
         settled = true;
-        res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ attachment }));
+        sendApiJson(res, 201, { attachment });
       } catch {
         fs.rmSync(finalPath, { force: true });
         fail(500, 'upload_failed');
@@ -808,10 +954,11 @@ export function createChatServer({
       sendStatus(res, 404, 'Not Found');
       return;
     }
+    const inline = SAFE_INLINE_MIME_TYPES.has(attachment.mime_type);
     const baseHeaders = {
       'Accept-Ranges': 'bytes',
-      'Content-Type': attachment.mime_type,
-      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
+      'Content-Type': inline ? attachment.mime_type : 'application/octet-stream',
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
       'Cache-Control': 'private, max-age=86400',
     };
     const range = req.headers.range;
@@ -851,15 +998,34 @@ export function createChatServer({
     const onSocketError = () => socket.destroy();
     socket.on('error', onSocketError);
 
-    if (!checkBasicAuth(req.headers.authorization, basicAuth)) {
+    const clientKey = requestClientKey(req);
+    const basicAuthOk = checkBasicAuth(req.headers.authorization, basicAuth);
+    if (basicAuth && !basicAuthOk) {
+      const existingRetry = Math.max(
+        globalAuthLimiter.retryAfterMs('global'),
+        basicAuthLimiter.retryAfterMs(clientKey),
+      );
+      const retryAfterMs = existingRetry || Math.max(
+        globalAuthLimiter.recordFailure('global'),
+        basicAuthLimiter.recordFailure(clientKey),
+      );
+      const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
       socket.end(
-        'HTTP/1.1 401 Unauthorized\r\n' +
-          'WWW-Authenticate: Basic realm="chat", charset="UTF-8"\r\n' +
+        `HTTP/1.1 ${retryAfterMs ? '429 Too Many Requests' : '401 Unauthorized'}\r\n` +
+          (retryAfterMs ? `Retry-After: ${retryAfterSeconds}\r\n` : 'WWW-Authenticate: Basic realm="chat", charset="UTF-8"\r\n') +
+          `Content-Security-Policy: ${SECURITY_HEADERS['Content-Security-Policy']}\r\n` +
+          'X-Content-Type-Options: nosniff\r\n' +
+          'Referrer-Policy: no-referrer\r\n' +
+          'X-Frame-Options: DENY\r\n' +
           'Connection: close\r\n' +
           'Content-Length: 0\r\n' +
           '\r\n',
       );
       return;
+    }
+    if (basicAuth) {
+      basicAuthLimiter.clear(clientKey);
+      globalAuthLimiter.clear('global');
     }
 
     socket.removeListener('error', onSocketError);
@@ -1043,11 +1209,12 @@ export function createChatServer({
 
   deleteExpiredSessions(db);
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     ws.nickname = null;
     ws.user = null;
     ws.sessionTokenHash = null;
     ws.roomId = null;
+    ws.clientKey = requestClientKey(req);
 
     ws.on('message', (data) => {
       const rawText = data.toString('utf8');
@@ -1103,11 +1270,28 @@ export function createChatServer({
       if (parsed.type === 'login') {
         const username = validateNickname(parsed.username);
         const password = typeof parsed.password === 'string' ? parsed.password : '';
+        const loginKey = `${username || ''}\0${ws.clientKey}`;
+        const globalRetry = globalAuthLimiter.retryAfterMs('global');
+        if (globalRetry) {
+          sendError(ws, 'rate_limited', { retry_after_ms: globalRetry });
+          return;
+        }
         const user = username ? getAccountByUsername(db, username) : undefined;
         if (!user || !verifyPassword(password, user.password_hash)) {
+          const retryAfterMs = Math.max(
+            appLoginLimiter.retryAfterMs(loginKey),
+            appLoginLimiter.recordFailure(loginKey),
+            globalAuthLimiter.recordFailure('global'),
+          );
+          if (retryAfterMs) {
+            sendError(ws, 'rate_limited', { retry_after_ms: retryAfterMs });
+            return;
+          }
           sendError(ws, 'bad_credentials');
           return;
         }
+        appLoginLimiter.clear(loginKey);
+        globalAuthLimiter.clear('global');
         if (isAccountBanned(user)) {
           sendError(ws, 'account_banned', { bannedUntil: user.banned_until });
           return;
@@ -1489,7 +1673,7 @@ export function createChatServer({
           if (
             !avatar ||
             avatar.uploader_user_id !== ws.user.id ||
-            !avatar.mime_type.startsWith('image/')
+            !SAFE_RASTER_MIME_TYPES.has(avatar.mime_type)
           ) {
             sendError(ws, 'bad_avatar');
             return;

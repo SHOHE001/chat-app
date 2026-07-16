@@ -3,6 +3,14 @@
 
   const SESSION_KEY = 'chat-app:session';
   const REACTIONS = ['👍', '❤️', '😂', '🎉', '👀'];
+  const SAFE_RASTER_MIME_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'image/avif',
+  ]);
+  const SAFE_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
   const $ = (id) => document.getElementById(id);
 
   const authScreen = $('auth-screen');
@@ -780,7 +788,9 @@
       showAuth(formatBanMessage(details.bannedUntil));
       return;
     }
-    const message = errorMessages[reason] || `操作できませんでした (${reason})`;
+    const message = reason === 'rate_limited'
+      ? `試行回数が多すぎます。${Math.max(1, Math.ceil(Number(details.retry_after_ms) / 1000))}秒待ってからお試しください。`
+      : (errorMessages[reason] || `操作できませんでした (${reason})`);
     if (reason === 'invalid_session') {
       localStorage.removeItem(SESSION_KEY);
       showAuth(message);
@@ -1346,7 +1356,7 @@
   function makeAttachment(attachment) {
     const wrapper = document.createElement('div');
     wrapper.className = 'message-attachment';
-    if (attachment.mime_type.startsWith('image/')) {
+    if (SAFE_RASTER_MIME_TYPES.has(attachment.mime_type)) {
       const link = document.createElement('a');
       link.href = attachment.url;
       link.target = '_blank';
@@ -1363,7 +1373,7 @@
       wrapper.append(link, caption);
       return wrapper;
     }
-    if (attachment.mime_type.startsWith('video/')) {
+    if (SAFE_VIDEO_MIME_TYPES.has(attachment.mime_type)) {
       const video = document.createElement('video');
       video.className = 'attachment-video';
       video.src = attachment.url;
@@ -1485,7 +1495,7 @@
 
   function uploadProfileAvatar(file) {
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
+    if (!SAFE_RASTER_MIME_TYPES.has(file.type.toLowerCase())) {
       $('profile-avatar-status').textContent = '画像ファイルを選んでください。';
       return;
     }
