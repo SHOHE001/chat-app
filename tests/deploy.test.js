@@ -215,6 +215,8 @@ test('T08 deploy scripts: 構文、commit archive、atomic symlink、rollbackを
   assert.match(release, /npm ci --omit=dev --ignore-scripts/);
   assert.match(release, /mv -Tf .*current/);
   assert.match(release, /restored previous release/);
+  const migration = await readFile(path.join(deployDir, 'migrate-gen8.sh'), 'utf8');
+  assert.match(migration, /chmod 0660 \/var\/lib\/chat-app\/chat\.db/);
 });
 
 test('T09 migration: 一時rootへDB・添付・env・backupを作り、Basic秘密を一度生成する', async () => {

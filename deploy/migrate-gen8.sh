@@ -64,6 +64,7 @@ MIGRATION_TIMESTAMP="$timestamp" "$source_dir/deploy/migrate-state.sh" \
 
 chown -R chat-app:chat-app /var/lib/chat-app
 chmod 2770 /var/lib/chat-app /var/lib/chat-app/uploads
+chmod 0660 /var/lib/chat-app/chat.db
 chown root:chat-app /etc/chat-app /etc/chat-app/chat-app.env
 chmod 0750 /etc/chat-app
 chmod 0640 /etc/chat-app/chat-app.env
