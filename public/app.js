@@ -57,6 +57,7 @@
   const logoutDialog = $('logout-dialog');
   const profileDialog = $('profile-dialog');
   const reactionUsersDialog = $('reaction-users-dialog');
+  const searchDialog = $('search-dialog');
   const profileAvatarInput = $('profile-avatar-input');
   const editMessageDialog = $('edit-message-dialog');
   const editMessageInput = $('edit-message-input');
@@ -98,6 +99,7 @@
   let serviceWorkerRegistration = null;
   let notificationSetupPromise = null;
   let swipeStart = null;
+  let pendingSearchResult = null;
   const mobilePanelsMedia = window.matchMedia('(max-width: 980px)');
   const launchParams = new URLSearchParams(location.search);
   let registrationInvite = launchParams.get('invite') || '';
@@ -708,6 +710,7 @@
       updateRoomHeader();
       closeNav();
       handleNotificationLaunch();
+      continueSearchNavigation();
       return;
     }
     if (data.type === 'message') {
@@ -767,6 +770,15 @@
       renderThreadPanel();
       threadPanel.classList.add('open');
       threadScrim.classList.remove('hidden');
+      if (pendingSearchResult?.kind === 'thread' && pendingSearchResult.threadId === data.thread.id) {
+        const result = pendingSearchResult;
+        pendingSearchResult = null;
+        requestAnimationFrame(() => {
+          if (!focusSearchMessage(threadMessages, result.messageId)) {
+            showToast('スレッドを開きました。古い投稿は検索結果から確認できます。');
+          }
+        });
+      }
       return;
     }
     if (data.type === 'thread_message' && data.threadId === openThread?.id) {
@@ -816,6 +828,11 @@
       if (data.report.reporter_user_id !== me?.id) showToast('新しい通報が届きました。');
       return;
     }
+    if (data.type === 'search_results') {
+      document.getElementById('search-error').textContent = '';
+      renderSearchResults(data.results || [], data.query || '');
+      return;
+    }
     if (data.type === 'error') handleError(data.reason, data);
   }
 
@@ -849,6 +866,7 @@
     bad_report: '通報理由を選び、自由記述の場合は内容を入力してください。',
     already_reported: 'このメッセージはすでに通報済みです。',
     posting_blocked: 'AI審査により新規投稿が停止されています。管理者またはオーナーへ解除を依頼してください。',
+    bad_search_query: '検索語は2〜100文字で入力してください。',
   };
 
   function formatBanMessage(bannedUntil) {
@@ -874,11 +892,78 @@
     } else if (!me || pendingAuth) {
       pendingAuth = false;
       authError.textContent = message;
+    } else if (searchDialog.open && reason === 'bad_search_query') {
+      document.getElementById('search-error').textContent = message;
     } else if (reportMessageDialog.open && ['bad_report', 'already_reported'].includes(reason)) {
       $('report-error').textContent = message;
     } else {
       showToast(message);
     }
+  }
+
+  function openSearch() {
+    document.getElementById('search-error').textContent = '';
+    document.getElementById('search-results').innerHTML = '<p class="search-empty">検索語を入力してください。</p>';
+    searchDialog.showModal();
+    requestAnimationFrame(() => document.getElementById('search-query').focus());
+  }
+
+  function renderSearchResults(results, query) {
+    const container = document.getElementById('search-results');
+    container.replaceChildren();
+    if (!results.length) {
+      const empty = document.createElement('p');
+      empty.className = 'search-empty';
+      empty.textContent = '「' + query + '」に一致するメッセージはありません。';
+      container.append(empty);
+      return;
+    }
+    for (const result of results) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'search-result';
+      const location = document.createElement('span');
+      location.className = 'search-result-location';
+      location.textContent = '#' + result.roomName + (result.kind === 'thread' ? ' › ' + result.threadTitle : '');
+      const byline = document.createElement('span');
+      byline.className = 'search-result-byline';
+      const user = users.find((item) => item.id === result.authorUserId);
+      byline.textContent = (accountName(user) || result.author) + ' · ' + formatExact(result.createdAt);
+      const body = document.createElement('span');
+      body.className = 'search-result-body';
+      appendRichText(body, result.body);
+      button.append(location, byline, body);
+      button.addEventListener('click', () => {
+        pendingSearchResult = result;
+        searchDialog.close();
+        send('switch_room', { roomId: result.roomId });
+      });
+      container.append(button);
+    }
+  }
+
+  function focusSearchMessage(container, messageId) {
+    const target = container.querySelector('[data-message-id="' + messageId + '"]');
+    if (!target) return false;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('reply-target-flash');
+    setTimeout(() => target.classList.remove('reply-target-flash'), 1500);
+    return true;
+  }
+
+  function continueSearchNavigation() {
+    if (!pendingSearchResult || pendingSearchResult.roomId !== currentRoomId) return;
+    if (pendingSearchResult.kind === 'thread') {
+      send('open_standalone_thread', { threadId: pendingSearchResult.threadId });
+      return;
+    }
+    const result = pendingSearchResult;
+    pendingSearchResult = null;
+    requestAnimationFrame(() => {
+      if (!focusSearchMessage(messageList, result.messageId)) {
+        showToast('チャンネルを開きました。古い投稿は検索結果から確認できます。');
+      }
+    });
   }
 
   function renderAll() {
@@ -1802,6 +1887,7 @@
     for (const message of openThreadMessages) {
       const row = document.createElement('article');
       row.className = 'thread-message';
+      row.dataset.messageId = message.id;
       const messageUser = userForMessage(message);
       row.append(messageUser ? makeProfileAvatar(messageUser) : makeAvatar(message.author));
       const meta = document.createElement('div');
@@ -1953,6 +2039,20 @@
 
   function cancelPanelSwipe() { swipeStart = null; }
 
+  document.getElementById('search-open').addEventListener('click', openSearch);
+  document.getElementById('search-close').addEventListener('click', () => searchDialog.close());
+  document.getElementById('search-cancel').addEventListener('click', () => searchDialog.close());
+  document.getElementById('search-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const query = document.getElementById('search-query').value.trim();
+    if (query.length < 2 || query.length > 100) {
+      document.getElementById('search-error').textContent = errorMessages.bad_search_query;
+      return;
+    }
+    document.getElementById('search-error').textContent = '';
+    document.getElementById('search-results').innerHTML = '<p class="search-empty">検索中…</p>';
+    if (!send('search_messages', { query })) document.getElementById('search-error').textContent = 'サーバーへ接続できていません。';
+  });
   authModeToggle.addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
   authForm.addEventListener('submit', (event) => {
     event.preventDefault();

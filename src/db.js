@@ -1817,6 +1817,54 @@ export function getDefaultRoomId(db) {
 }
 
 /**
+ * 閲覧可能なルーム内の通常投稿と専用スレッド投稿を新しい順で検索する。
+ * LIKE のワイルドカードは検索語として扱い、非表示投稿は除外する。
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} query
+ * @param {number[]} roomIds
+ * @param {number} limit
+ */
+export function searchMessages(db, query, roomIds, limit = 50) {
+  if (!roomIds.length) return [];
+  const roomPlaceholders = roomIds.map(() => '?').join(', ');
+  const pattern = '%' + query.replace(/[~%_]/g, (value) => '~' + value) + '%';
+  return db.prepare(`
+    SELECT * FROM (
+      SELECT 'message' AS kind, m.id AS message_id, m.room_id, r.name AS room_name,
+             NULL AS thread_id, NULL AS thread_title, m.author_user_id, m.author,
+             m.body, m.created_at
+      FROM messages m
+      JOIN rooms r ON r.id = m.room_id
+      WHERE m.thread_root_id IS NULL AND m.hidden_at IS NULL
+        AND m.room_id IN (${roomPlaceholders})
+        AND m.body LIKE ? ESCAPE '~'
+      UNION ALL
+      SELECT 'thread' AS kind, m.id AS message_id, t.room_id, r.name AS room_name,
+             t.id AS thread_id, t.title AS thread_title, m.author_user_id, m.author,
+             m.body, m.created_at
+      FROM standalone_thread_messages m
+      JOIN standalone_threads t ON t.id = m.thread_id
+      JOIN rooms r ON r.id = t.room_id
+      WHERE m.hidden_at IS NULL AND t.room_id IN (${roomPlaceholders})
+        AND m.body LIKE ? ESCAPE '~'
+    )
+    ORDER BY created_at DESC, message_id DESC
+    LIMIT ?
+  `).all(...roomIds, pattern, ...roomIds, pattern, limit).map((row) => ({
+    kind: row.kind,
+    messageId: Number(row.message_id),
+    roomId: Number(row.room_id),
+    roomName: row.room_name,
+    threadId: row.thread_id === null ? null : Number(row.thread_id),
+    threadTitle: row.thread_title || null,
+    authorUserId: row.author_user_id === null ? null : Number(row.author_user_id),
+    author: row.author,
+    body: row.body,
+    createdAt: Number(row.created_at),
+  }));
+}
+
+/**
  * ルーム一覧を id 昇順で返す。
  * @param {import('node:sqlite').DatabaseSync} db
  * @returns {{id: number, name: string, allowed_roles: string[], kind: string, created_at: number}[]}

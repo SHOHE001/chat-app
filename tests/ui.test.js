@@ -268,3 +268,15 @@ test('UI22 reaction members: リアクション長押しで付与したメンバ
   assert.ok(app.includes("send('toggle_reaction', { messageId, emoji: reaction.emoji })"));
   assert.ok(css.includes('.reaction-users-list {'));
 });
+
+test('UI23 message search: 検索ダイアログから結果のチャンネル・スレッドへ移動する', () => {
+  assert.match(html, /id="search-open"/);
+  assert.match(html, /<dialog id="search-dialog"/);
+  assert.match(html, /id="search-query"[^>]*minlength="2"[^>]*maxlength="100"/);
+  assert.ok(app.includes("send('search_messages', { query })"));
+  assert.ok(app.includes("data.type === 'search_results'"));
+  assert.ok(app.includes("send('switch_room', { roomId: result.roomId })"));
+  assert.ok(app.includes("send('open_standalone_thread', { threadId: pendingSearchResult.threadId })"));
+  assert.ok(app.includes("row.dataset.messageId = message.id"));
+  assert.ok(css.includes('.search-results {'));
+});

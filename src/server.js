@@ -19,6 +19,7 @@ import {
   upsertUser,
   getDefaultRoomId,
   listRooms,
+  searchMessages,
   createRoom,
   deleteRoom,
   getRoomById,
@@ -2066,6 +2067,22 @@ export function createChatServer({
           messages: getRecentMessages(db, targetRoomId, HISTORY_LIMIT),
           threads: threadsPayload(targetRoomId),
         });
+        return;
+      }
+
+      if (parsed.type === 'search_messages') {
+        if (!ws.user) {
+          sendError(ws, 'not_authenticated');
+          return;
+        }
+        const query = typeof parsed.query === 'string' ? parsed.query.trim() : '';
+        if (query.length < 2 || query.length > 100 || /[\u0000-\u001f\u007f]/.test(query)) {
+          sendError(ws, 'bad_search_query');
+          return;
+        }
+        const accessibleRoomIds = roomsPayload(ws.user).map((room) => room.id);
+        const results = searchMessages(db, query, accessibleRoomIds, 50);
+        sendJson(ws, { type: 'search_results', query, results });
         return;
       }
 
