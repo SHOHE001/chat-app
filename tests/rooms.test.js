@@ -179,7 +179,7 @@ test('T14_create_room 管理者のcreate_roomで全クライアントにroomsが
         ['allowedRoles', 'id', 'kind', 'name', 'notificationsEnabled'],
       );
       assert.deepEqual(room.allowedRoles, []);
-      assert.equal(room.notificationsEnabled, false);
+      assert.equal(room.notificationsEnabled, room.kind === 'announcement');
       assert.ok(['chat', 'announcement'].includes(room.kind));
     }
 
@@ -206,7 +206,7 @@ test('T14_create_room 管理者のcreate_roomで全クライアントにroomsが
         ['allowedRoles', 'id', 'kind', 'name', 'notificationsEnabled'],
       );
       assert.deepEqual(room.allowedRoles, []);
-      assert.equal(room.notificationsEnabled, false);
+      assert.equal(room.notificationsEnabled, room.kind === 'announcement');
       assert.ok(['chat', 'announcement'].includes(room.kind));
     }
 
