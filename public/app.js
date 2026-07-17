@@ -56,6 +56,7 @@
   const createRoomDialog = $('create-room-dialog');
   const logoutDialog = $('logout-dialog');
   const profileDialog = $('profile-dialog');
+  const reactionUsersDialog = $('reaction-users-dialog');
   const profileAvatarInput = $('profile-avatar-input');
   const editMessageDialog = $('edit-message-dialog');
   const editMessageInput = $('edit-message-input');
@@ -84,6 +85,7 @@
   let pendingAttachment = null;
   let uploadRequest = null;
   let profileAvatarId = null;
+  let profileTargetUserId = null;
   let profileUploadRequest = null;
   let editingTarget = null;
   let deletingTarget = null;
@@ -668,6 +670,13 @@
         showApp();
       }
       renderMembers();
+      if (profileDialog.open && profileTargetUserId) {
+        const profileUser = users.find((user) => user.id === profileTargetUserId);
+        if (profileUser) {
+          document.getElementById('profile-roles').replaceChildren(makeRoleBadges(profileUser));
+          renderProfileRoleEditor(profileUser);
+        }
+      }
       if (messages.length) renderMessages(false);
       renderComposerHighlight();
       return;
@@ -1019,28 +1028,6 @@
         select.addEventListener('change', () => send('set_role', { userId: user.id, role: select.value }));
         actions.append(select);
 
-        const roleControls = document.createElement('fieldset');
-        roleControls.className = 'profile-role-controls';
-        roleControls.title = '属性ロール';
-        roleControls.addEventListener('click', (event) => event.stopPropagation());
-        const selectedRoles = new Set(profileRoles(user));
-        for (const value of profileRoleValues) {
-          const label = document.createElement('label');
-          const checkbox = document.createElement('input');
-          checkbox.type = 'checkbox';
-          checkbox.value = value;
-          checkbox.checked = selectedRoles.has(value);
-          checkbox.setAttribute('aria-label', formatRole(value));
-          checkbox.addEventListener('change', () => {
-            const roles = [...roleControls.querySelectorAll('input:checked')]
-              .map((input) => input.value);
-            send('set_profile_roles', { userId: user.id, roles });
-          });
-          const shortLabel = { adult: '大', child: '子', staff: '職' }[value];
-          label.append(checkbox, shortLabel);
-          roleControls.append(label);
-        }
-        actions.append(roleControls);
       }
       if (canModerateUser(user)) {
         const banButton = document.createElement('button');
@@ -1517,13 +1504,77 @@
     row.addEventListener('contextmenu', cancel);
   }
 
+  function openReactionUsers(reaction) {
+    document.getElementById('reaction-users-title').textContent = reaction.emoji + ' のリアクション';
+    const list = document.getElementById('reaction-users-list');
+    list.replaceChildren();
+    for (const userId of reaction.userIds || []) {
+      const user = users.find((item) => item.id === userId);
+      const row = document.createElement('div');
+      row.className = 'reaction-user';
+      if (user) {
+        row.append(makeAvatar(user.username, true, user.avatar?.url));
+        const copy = document.createElement('div');
+        const name = document.createElement('strong');
+        name.textContent = accountName(user);
+        const handle = document.createElement('span');
+        handle.textContent = '@' + user.username;
+        copy.append(name, handle);
+        row.append(copy);
+      } else {
+        row.textContent = '不明なメンバー';
+      }
+      list.append(row);
+    }
+    if (!list.childElementCount) list.textContent = 'リアクションしたメンバーはいません。';
+    reactionUsersDialog.showModal();
+  }
+
+  function installReactionLongPress(chip, reaction) {
+    let timer;
+    let startX = 0;
+    let startY = 0;
+    let longPressed = false;
+    const cancel = () => {
+      clearTimeout(timer);
+      timer = undefined;
+    };
+    chip.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      longPressed = false;
+      startX = event.clientX;
+      startY = event.clientY;
+      cancel();
+      timer = setTimeout(() => {
+        longPressed = true;
+        openReactionUsers(reaction);
+        navigator.vibrate?.(12);
+      }, 500);
+    });
+    chip.addEventListener('pointermove', (event) => {
+      if (Math.abs(event.clientX - startX) > 8 || Math.abs(event.clientY - startY) > 8) cancel();
+    });
+    chip.addEventListener('pointerup', cancel);
+    chip.addEventListener('pointercancel', cancel);
+    chip.addEventListener('pointerleave', cancel);
+    chip.addEventListener('contextmenu', (event) => event.preventDefault());
+    chip.addEventListener('click', (event) => {
+      if (longPressed) {
+        event.preventDefault();
+        longPressed = false;
+        return;
+      }
+      send('toggle_reaction', { messageId, emoji: reaction.emoji });
+    });
+  }
+
   function makeReactionChip(messageId, reaction) {
     const chip = document.createElement('button');
     const mine = reaction.userIds?.includes(me?.id);
     chip.className = `reaction-chip${mine ? ' mine' : ''}`;
     chip.textContent = `${reaction.emoji} ${reaction.count}`;
-    chip.title = mine ? 'リアクションを取り消す' : 'リアクションする';
-    chip.addEventListener('click', () => send('toggle_reaction', { messageId, emoji: reaction.emoji }));
+    chip.title = 'タップで' + (mine ? '取り消し' : 'リアクション') + '・長押しでメンバーを表示';
+    installReactionLongPress(chip, reaction);
     return chip;
   }
 
@@ -1655,7 +1706,18 @@
     xhr.send(file);
   }
 
+  function renderProfileRoleEditor(user) {
+    const editor = document.getElementById('profile-role-editor');
+    const canEdit = me?.role === 'owner' && user?.role !== 'owner';
+    editor.classList.toggle('hidden', !canEdit);
+    const selected = new Set(profileRoles(user));
+    for (const input of editor.querySelectorAll('input[name="profile-role-edit"]')) {
+      input.checked = selected.has(input.value);
+    }
+  }
+
   function openProfile(user, editing) {
+    profileTargetUserId = user?.id || null;
     if (!user) return;
     profileAvatarId = user.avatar?.id || null;
     setAvatar($('profile-avatar'), user.username, user.avatar?.url);
@@ -1663,6 +1725,7 @@
     $('profile-handle').textContent = `@${user.username}`;
     $('profile-role').textContent = formatRole(user.role);
     $('profile-roles').replaceChildren(makeRoleBadges(user));
+    renderProfileRoleEditor(user);
     $('profile-bio-view').textContent = user.bio || '自己紹介はまだありません。';
     $('profile-display-name-input').value = user.display_name || '';
     $('profile-bio-input').value = user.bio || '';
@@ -2024,6 +2087,13 @@
   $('profile-button').addEventListener('click', () => openProfile(me, true));
   $('profile-avatar-button').addEventListener('click', () => profileAvatarInput.click());
   profileAvatarInput.addEventListener('change', () => uploadProfileAvatar(profileAvatarInput.files?.[0]));
+  document.getElementById('profile-role-editor').addEventListener('change', () => {
+    const user = users.find((item) => item.id === profileTargetUserId);
+    if (!user || me?.role !== 'owner' || user.role === 'owner') return;
+    const roles = [...document.querySelectorAll('input[name="profile-role-edit"]:checked')]
+      .map((input) => input.value);
+    send('set_profile_roles', { userId: user.id, roles });
+  });
   $('profile-form').addEventListener('submit', (event) => {
     event.preventDefault();
     if (event.submitter?.value === 'cancel') {
@@ -2043,6 +2113,7 @@
     });
   });
   profileDialog.addEventListener('close', () => {
+    profileTargetUserId = null;
     if (profileUploadRequest) profileUploadRequest.abort();
     profileUploadRequest = null;
     profileAvatarInput.value = '';

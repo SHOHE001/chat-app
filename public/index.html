@@ -211,6 +211,14 @@
     </form>
   </dialog>
 
+  <dialog id="reaction-users-dialog">
+    <form method="dialog" class="dialog-form">
+      <header><div><h2 id="reaction-users-title">リアクション</h2><p>このリアクションを付けたメンバー</p></div><button value="cancel" class="icon-button" aria-label="閉じる">×</button></header>
+      <div id="reaction-users-list" class="reaction-users-list"></div>
+      <footer><button value="cancel" class="secondary-button">閉じる</button></footer>
+    </form>
+  </dialog>
+
   <dialog id="profile-dialog" class="profile-dialog">
     <form id="profile-form" method="dialog">
       <header class="profile-header">
@@ -222,6 +230,15 @@
         <span id="profile-handle"></span>
         <span id="profile-role" class="role-badge"></span>
         <div id="profile-roles" class="profile-role-badges"></div>
+        <fieldset id="profile-role-editor" class="profile-role-editor hidden">
+          <legend>属性ロール</legend>
+          <p>オーナーだけが変更できます。</p>
+          <div class="profile-role-options">
+            <label><input type="checkbox" name="profile-role-edit" value="adult">大人</label>
+            <label><input type="checkbox" name="profile-role-edit" value="child">子供</label>
+            <label><input type="checkbox" name="profile-role-edit" value="staff">スタッフ</label>
+          </div>
+        </fieldset>
         <p id="profile-bio-view" class="profile-bio"></p>
         <div id="profile-edit-fields" class="profile-edit-fields hidden">
           <input id="profile-avatar-input" type="file" accept="image/*" hidden>

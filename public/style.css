@@ -144,6 +144,11 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .reaction-chip { min-width: 38px; height: 26px; padding: 0 7px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); background: #2b2d31; cursor: pointer; }
 .reaction-chip.mine { border-color: var(--accent); color: #dee0fc; background: rgba(88,101,242,.18); }
+.reaction-chip { touch-action: manipulation; -webkit-touch-callout: none; }
+.reaction-users-list { display: grid; gap: 6px; min-height: 72px; max-height: min(55vh, 420px); overflow-y: auto; padding: 8px 22px 18px; }
+.reaction-user { display: flex; min-height: 44px; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; background: #2b2d31; }
+.reaction-user strong, .reaction-user span { display: block; }
+.reaction-user span { color: var(--faint); font-size: 11px; }
 
 .composer-wrap { position: relative; width: min(100%, var(--chat-content-max)); margin: 0 auto; padding: 0 var(--content-gutter) max(24px, env(safe-area-inset-bottom)); }
 .composer-reply { display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px; border-radius: var(--radius) var(--radius) 0 0; color: var(--faint); background: #2b2d31; font-size: 12px; }
@@ -204,9 +209,6 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .ban-status { display: block; margin-top: 2px; color: #fa777c; font-size: 10px; }
 .member-moderation { display: grid; flex: 0 0 auto; gap: 4px; justify-items: stretch; }
 .role-select { width: 88px; border: 0; color: var(--muted); background: #1e1f22; font-size: 11px; }
-.profile-role-controls { display: flex; margin: 0; padding: 3px; border: 1px solid var(--line); border-radius: 4px; gap: 3px; }
-.profile-role-controls label { display: flex; align-items: center; gap: 1px; color: var(--faint); font-size: 9px; cursor: pointer; }
-.profile-role-controls input { width: 11px; height: 11px; margin: 0; }
 .channel-lock { margin-left: auto; font-size: 11px; opacity: .72; }
 .room-access-fieldset { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
 .room-access-fieldset legend { padding: 0 4px; font-weight: 700; }
@@ -219,7 +221,7 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .member-ban-button.unban { border-color: #4e5058; color: var(--muted); }
 .member-ban-button.unban:hover { color: var(--text); background: #4e5058; }
 .member { cursor: pointer; }
-.profile-dialog { overflow: hidden; background: #232428; }
+.profile-dialog { overflow-y: auto; background: #232428; }
 .profile-header { height: 110px; background: linear-gradient(135deg, #5865f2, #3ba7a0); }
 .profile-close { position: absolute; top: 10px; right: 10px; color: white; background: rgba(0,0,0,.25); }
 .profile-content { position: relative; padding: 56px 24px 24px; background: var(--chat); }
@@ -227,6 +229,12 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 .profile-content h2 { margin: 0; font-size: 22px; }
 .profile-content > span { display: inline-block; margin: 2px 6px 0 0; color: var(--faint); }
 .profile-content > .profile-role-badges { display: flex; margin: 8px 0 0; }
+.profile-role-editor { margin: 16px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.profile-role-editor legend { padding: 0 5px; font-size: 12px; font-weight: 700; }
+.profile-role-editor > p { margin: 0 0 10px; color: var(--faint); font-size: 11px; }
+.profile-role-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.profile-role-options label { display: flex; min-height: 36px; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 5px; background: #2b2d31; cursor: pointer; }
+.profile-role-options input { width: 16px; height: 16px; margin: 0; }
 .profile-bio { min-height: 20px; margin: 18px 0 0; color: #dbdee1; white-space: pre-wrap; }
 .profile-edit-fields { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .profile-edit-fields label { display: grid; gap: 7px; margin-top: 16px; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
