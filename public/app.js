@@ -2212,6 +2212,9 @@
       avatarId: profileAvatarId,
     });
   });
+  profileDialog.addEventListener('click', (event) => {
+    if (event.target === profileDialog) profileDialog.close();
+  });
   profileDialog.addEventListener('close', () => {
     profileTargetUserId = null;
     if (profileUploadRequest) profileUploadRequest.abort();
