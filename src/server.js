@@ -726,6 +726,7 @@ export function createChatServer({
       .map((room) => ({
         id: room.id,
         name: room.name,
+        kind: room.kind,
         allowedRoles: room.allowed_roles,
         notificationsEnabled: notificationEnabledRoomIds.has(room.id),
       }));
@@ -1397,6 +1398,11 @@ export function createChatServer({
     return ws.user?.role === 'owner' || ws.user?.role === 'admin';
   }
 
+  function canPostToRoom(ws, roomId = ws.roomId) {
+    const room = getRoomById(db, roomId);
+    return Boolean(room && (room.kind !== 'announcement' || canManageRooms(ws)));
+  }
+
   function canModerateUser(actor, target) {
     if (!actor || !target || actor.id === target.id || target.role === 'owner') return false;
     if (actor.role === 'owner') return true;
@@ -1592,6 +1598,10 @@ export function createChatServer({
         }
         if (postingIsBlocked(ws.user)) {
           sendError(ws, 'posting_blocked', { blockReason: ws.user.posting_blocked_reason });
+          return;
+        }
+        if (!canPostToRoom(ws)) {
+          sendError(ws, 'announcement_read_only');
           return;
         }
         const body = sanitizeBody(parsed.body) || '';
@@ -1983,6 +1993,10 @@ export function createChatServer({
           sendError(ws, 'cannot_delete_default');
           return;
         }
+        if (targetRoom.kind === 'announcement') {
+          sendError(ws, 'cannot_delete_announcement');
+          return;
+        }
         deleteRoom(db, targetRoomId);
         const defaultMessages = getRecentMessages(db, defaultRoomId, HISTORY_LIMIT);
         for (const client of wss.clients) {
@@ -2049,6 +2063,10 @@ export function createChatServer({
           sendError(ws, 'posting_blocked', { blockReason: ws.user.posting_blocked_reason });
           return;
         }
+        if (!canPostToRoom(ws)) {
+          sendError(ws, 'announcement_read_only');
+          return;
+        }
         const title = validateThreadTitle(parsed.title);
         const body = parsed.body ? sanitizeBody(parsed.body) : null;
         if (!title) {
@@ -2095,6 +2113,10 @@ export function createChatServer({
         }
         if (postingIsBlocked(ws.user)) {
           sendError(ws, 'posting_blocked', { blockReason: ws.user.posting_blocked_reason });
+          return;
+        }
+        if (!canPostToRoom(ws)) {
+          sendError(ws, 'announcement_read_only');
           return;
         }
         const threadId = parseRoomId(parsed.threadId);

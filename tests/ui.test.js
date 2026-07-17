@@ -220,3 +220,11 @@ test('UI18 message reply: 長押しメニューから返信し、参照表示と
   assert.match(css, /\.message-reply-reference/);
   assert.match(css, /\.composer-reply/);
 });
+
+test('UI19 announcements: 専用アイコンと一般ユーザー向け読み取り専用表示を備える', () => {
+  assert.match(app, /room\.kind === 'announcement' \? '📢' : '#'/);
+  assert.match(app, /お知らせは管理者のみ投稿できます/);
+  assert.match(app, /room\.kind !== 'announcement'/);
+  assert.match(app, /アプリの更新内容や運営からのお知らせを掲載します/);
+  assert.match(app, /announcement_read_only/);
+});

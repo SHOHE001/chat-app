@@ -529,16 +529,22 @@
 
   function updatePostingState() {
     const blocked = Boolean(me?.posting_blocked_at);
+    const room = rooms.find((item) => item.id === currentRoomId);
+    const announcementReadOnly = room?.kind === 'announcement' &&
+      !['owner', 'admin'].includes(me?.role);
+    const disabled = blocked || announcementReadOnly;
     const controls = [
       messageInput, attachButton, messageForm.querySelector('.send-button'),
       threadReplyInput, threadReplyForm.querySelector('.send-button'), $('add-thread-button'),
     ];
-    for (const control of controls) if (control) control.disabled = blocked;
+    for (const control of controls) if (control) control.disabled = disabled;
     if (blocked) {
       messageInput.placeholder = '投稿が停止されています（管理者が解除できます）';
       threadReplyInput.placeholder = '投稿が停止されています';
+    } else if (announcementReadOnly) {
+      messageInput.placeholder = 'お知らせは管理者のみ投稿できます';
+      threadReplyInput.placeholder = 'お知らせは管理者のみ投稿できます';
     } else {
-      const room = rooms.find((item) => item.id === currentRoomId);
       messageInput.placeholder = `#${room?.name || ''} へメッセージ`;
       threadReplyInput.placeholder = '返信する';
     }
@@ -791,6 +797,8 @@
     empty_message: '本文を空にはできません。',
     message_not_found: 'メッセージが見つかりません。',
     reply_not_found: '返信先のメッセージが見つからないか、表示できません。',
+    cannot_delete_announcement: 'お知らせチャンネルは削除できません。',
+    announcement_read_only: 'お知らせチャンネルへ投稿できるのは管理者とオーナーだけです。',
     bad_ban_duration: 'BANする期間を選び直してください。',
     user_not_found: '対象のアカウントが見つかりません。',
     invite_required: '新規登録には管理者が表示した招待QRコードが必要です。',
@@ -844,6 +852,7 @@
   function updateRoomHeader() {
     const room = rooms.find((item) => item.id === currentRoomId);
     const name = room?.name || '';
+    document.querySelector('.topbar .hash').textContent = room?.kind === 'announcement' ? '📢' : '#';
     $('room-name').textContent = name;
     messageInput.placeholder = `#${name} へメッセージ`;
     updatePostingState();
@@ -857,7 +866,7 @@
       item.className = `nav-item${room.id === currentRoomId ? ' active' : ''}`;
       const button = document.createElement('button');
       button.className = 'nav-select';
-      button.innerHTML = '<span class="channel-icon">#</span>';
+      button.innerHTML = `<span class="channel-icon">${room.kind === 'announcement' ? '📢' : '#'}</span>`;
       button.append(document.createTextNode(room.name));
       if (room.allowedRoles?.length) {
         const lock = document.createElement('span');
@@ -885,7 +894,7 @@
         });
       });
       item.append(notificationToggle);
-      if (canManage && room.id !== rooms[0]?.id) {
+      if (canManage && room.id !== rooms[0]?.id && room.kind !== 'announcement') {
         const remove = document.createElement('button');
         remove.className = 'nav-delete';
         remove.textContent = '×';
@@ -1299,7 +1308,12 @@
     const room = rooms.find((item) => item.id === currentRoomId);
     const welcome = document.createElement('section');
     welcome.className = 'welcome';
-    welcome.innerHTML = `<div class="welcome-hash">#</div><h2>#${escapeHtml(room?.name || '')  }</h2><p>ここが #${escapeHtml(room?.name || '')} の始まりです。</p>`;
+    const announcement = room?.kind === 'announcement';
+    const symbol = announcement ? '📢' : '#';
+    const description = announcement
+      ? 'アプリの更新内容や運営からのお知らせを掲載します。'
+      : `ここが #${escapeHtml(room?.name || '')} の始まりです。`;
+    welcome.innerHTML = `<div class="welcome-hash">${symbol}</div><h2>${symbol}${escapeHtml(room?.name || '')}</h2><p>${description}</p>`;
     messageList.append(welcome);
     let prior = null;
     for (const message of messages) {

@@ -293,7 +293,7 @@ test('T34_boundary_thread_validation 不存在id/文字列"1"/小数/0/他ルー
   }
 });
 
-test('T35_migration_v1_to_v14 旧スキーマDBがv14になり既存行が読め、再オープンも冪等に成功', async () => {
+test('T35_migration_v1_to_v15 旧スキーマDBがv15になり既存行が読め、再オープンも冪等に成功', async () => {
   const dbPath = tmpDbPath();
   try {
     // 旧スキーマ（thread_root_id 列なし）を手組みし user_version=1 にする。
@@ -327,8 +327,9 @@ test('T35_migration_v1_to_v14 旧スキーマDBがv14になり既存行が読め
 
     const db = openDb(dbPath);
     const version = db.prepare('PRAGMA user_version').get().user_version;
-    assert.equal(version, 14);
+    assert.equal(version, 15);
     assert.ok(db.prepare('PRAGMA table_info(messages)').all().some((column) => column.name === 'reply_to_id'));
+    assert.ok(db.prepare('PRAGMA table_info(rooms)').all().some((column) => column.name === 'kind'));
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_reports'").get());
     assert.ok(db.prepare('PRAGMA table_info(rooms)').all().some((column) => column.name === 'allowed_roles'));
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'enabled_room_notifications'").get());
@@ -352,7 +353,7 @@ test('T35_migration_v1_to_v14 旧スキーマDBがv14になり既存行が読め
     // 同じ DB を再度 openDb しても壊れない（冪等）
     const db2 = openDb(dbPath);
     const version2 = db2.prepare('PRAGMA user_version').get().user_version;
-    assert.equal(version2, 14);
+    assert.equal(version2, 15);
     const messagesAfterReopen = getRecentMessages(db2, roomId);
     assert.equal(messagesAfterReopen.length, 1);
     db2.close();
@@ -362,7 +363,7 @@ test('T35_migration_v1_to_v14 旧スキーマDBがv14になり既存行が読め
     }
   }
 
-  // 「列あり・user_version=1」の中間状態 DB でも openDb が成功し version 14 になる
+  // 「列あり・user_version=1」の中間状態 DB でも openDb が成功し version 15 になる
   const dbPath2 = tmpDbPath();
   try {
     const raw2 = new DatabaseSync(dbPath2);
@@ -391,7 +392,7 @@ test('T35_migration_v1_to_v14 旧スキーマDBがv14になり既存行が読め
 
     const db3 = openDb(dbPath2);
     const version3 = db3.prepare('PRAGMA user_version').get().user_version;
-    assert.equal(version3, 14);
+    assert.equal(version3, 15);
     db3.close();
   } finally {
     if (existsSync(dbPath2)) {

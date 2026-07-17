@@ -5,6 +5,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 const DEFAULT_ROOM_NAME = '全体';
+const ANNOUNCEMENT_ROOM_NAME = 'お知らせ';
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -26,6 +27,7 @@ CREATE TABLE IF NOT EXISTS rooms (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT UNIQUE NOT NULL,
   allowed_roles TEXT,
+  kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'announcement')),
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS attachments (
@@ -170,11 +172,12 @@ export function openDb(path) {
   // 6=メッセージ編集日時、7=Web Push購読とアプリ設定、8=アカウントBAN、
   // 9=通報スナップショットとAI審査状態、10=AI巡回・非表示・投稿停止、
   // 11=ロール限定チャンネル、12=ユーザー別チャンネル通知設定（既定オン）、
-  // 13=チャンネル通知を既定オフへ変更、14=タイムラインのメッセージ返信。
+  // 13=チャンネル通知を既定オフへ変更、14=タイムラインのメッセージ返信、
+  // 15=管理者だけが投稿できるお知らせチャンネル。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 14');
-    userVersion = 14;
+    db.exec('PRAGMA user_version = 15');
+    userVersion = 15;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -493,6 +496,24 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 14) {
+    const roomColumns = new Set(
+      db.prepare('PRAGMA table_info(rooms)').all().map((column) => column.name),
+    );
+    db.exec('BEGIN');
+    try {
+      if (!roomColumns.has('kind')) {
+        db.exec("ALTER TABLE rooms ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'announcement'))");
+      }
+      db.exec('PRAGMA user_version = 15');
+      db.exec('COMMIT');
+      userVersion = 15;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_id)');
@@ -524,6 +545,12 @@ export function openDb(path) {
     DEFAULT_ROOM_NAME,
     Date.now(),
   );
+  db.prepare(
+    "INSERT OR IGNORE INTO rooms (name, kind, created_at) VALUES (?, 'announcement', ?)",
+  ).run(ANNOUNCEMENT_ROOM_NAME, Date.now());
+  db.prepare(
+    "UPDATE rooms SET kind = 'announcement', allowed_roles = NULL WHERE name = ?",
+  ).run(ANNOUNCEMENT_ROOM_NAME);
 
   return db;
 }
@@ -1643,14 +1670,15 @@ export function getDefaultRoomId(db) {
 /**
  * ルーム一覧を id 昇順で返す。
  * @param {import('node:sqlite').DatabaseSync} db
- * @returns {{id: number, name: string, allowed_roles: string[], created_at: number}[]}
+ * @returns {{id: number, name: string, allowed_roles: string[], kind: string, created_at: number}[]}
  */
 export function listRooms(db) {
-  const rows = db.prepare('SELECT id, name, allowed_roles, created_at FROM rooms ORDER BY id ASC').all();
+  const rows = db.prepare('SELECT id, name, allowed_roles, kind, created_at FROM rooms ORDER BY id ASC').all();
   return rows.map((row) => ({
     id: Number(row.id),
     name: row.name,
     allowed_roles: row.allowed_roles ? JSON.parse(row.allowed_roles) : [],
+    kind: row.kind,
     created_at: Number(row.created_at),
   }));
 }
@@ -1670,6 +1698,7 @@ export function createRoom(db, name, allowedRoles = []) {
     id: Number(info.lastInsertRowid),
     name,
     allowed_roles: allowedRoles,
+    kind: 'chat',
     created_at: createdAt,
   };
 }
@@ -1680,12 +1709,13 @@ export function createRoom(db, name, allowedRoles = []) {
  * @param {number} roomId
  */
 export function getRoomById(db, roomId) {
-  const row = db.prepare('SELECT id, name, allowed_roles, created_at FROM rooms WHERE id = ?').get(roomId);
+  const row = db.prepare('SELECT id, name, allowed_roles, kind, created_at FROM rooms WHERE id = ?').get(roomId);
   if (!row) return undefined;
   return {
     id: Number(row.id),
     name: row.name,
     allowed_roles: row.allowed_roles ? JSON.parse(row.allowed_roles) : [],
+    kind: row.kind,
     created_at: Number(row.created_at),
   };
 }
