@@ -116,10 +116,9 @@
       <header><div><h2>チャンネルを作成</h2><p>admin以上の権限で管理できます。</p></div><button id="room-create-close" type="button" class="icon-button" aria-label="閉じる">×</button></header>
       <label>チャンネル名<input id="room-name-input" maxlength="32" required placeholder="新しいチャンネル"></label>
       <fieldset class="room-access-fieldset">
-        <legend>入室できる一般ロール</legend>
-        <p>未選択なら全員。オーナーと管理者は常に入室できます。</p>
+        <legend>入室できる属性ロール</legend>
+        <p>未選択なら全員。オーナーはすべての属性を持ち、管理者は付与された属性で判定されます。</p>
         <div class="room-access-grid">
-          <label><input type="checkbox" name="room-access-role" value="member">メンバー</label>
           <label><input type="checkbox" name="room-access-role" value="adult">大人</label>
           <label><input type="checkbox" name="room-access-role" value="child">子供</label>
           <label><input type="checkbox" name="room-access-role" value="staff">スタッフ</label>
@@ -222,6 +221,7 @@
         <h2 id="profile-name"></h2>
         <span id="profile-handle"></span>
         <span id="profile-role" class="role-badge"></span>
+        <div id="profile-roles" class="profile-role-badges"></div>
         <p id="profile-bio-view" class="profile-bio"></p>
         <div id="profile-edit-fields" class="profile-edit-fields hidden">
           <input id="profile-avatar-input" type="file" accept="image/*" hidden>

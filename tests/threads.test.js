@@ -293,7 +293,7 @@ test('T34_boundary_thread_validation 不存在id/文字列"1"/小数/0/他ルー
   }
 });
 
-test('T35_migration_v1_to_v16 旧スキーマDBがv16になり既存行が読め、再オープンも冪等に成功', async () => {
+test('T35_migration_v1_to_v17 旧スキーマDBがv17になり既存行が読め、再オープンも冪等に成功', async () => {
   const dbPath = tmpDbPath();
   try {
     // 旧スキーマ（thread_root_id 列なし）を手組みし user_version=1 にする。
@@ -327,13 +327,14 @@ test('T35_migration_v1_to_v16 旧スキーマDBがv16になり既存行が読め
 
     const db = openDb(dbPath);
     const version = db.prepare('PRAGMA user_version').get().user_version;
-    assert.equal(version, 16);
+    assert.equal(version, 17);
     assert.ok(db.prepare('PRAGMA table_info(messages)').all().some((column) => column.name === 'reply_to_id'));
     assert.ok(db.prepare('PRAGMA table_info(rooms)').all().some((column) => column.name === 'kind'));
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_reports'").get());
     assert.ok(db.prepare('PRAGMA table_info(rooms)').all().some((column) => column.name === 'allowed_roles'));
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'enabled_room_notifications'").get());
     assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'disabled_room_notifications'").get());
+    assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_profile_roles'").get());
 
     const roomId = getDefaultRoomId(db);
     const messages = getRecentMessages(db, roomId);
@@ -354,7 +355,7 @@ test('T35_migration_v1_to_v16 旧スキーマDBがv16になり既存行が読め
     // 同じ DB を再度 openDb しても壊れない（冪等）
     const db2 = openDb(dbPath);
     const version2 = db2.prepare('PRAGMA user_version').get().user_version;
-    assert.equal(version2, 16);
+    assert.equal(version2, 17);
     const messagesAfterReopen = getRecentMessages(db2, roomId);
     assert.equal(messagesAfterReopen.length, 1);
     db2.close();
@@ -364,7 +365,7 @@ test('T35_migration_v1_to_v16 旧スキーマDBがv16になり既存行が読め
     }
   }
 
-  // 「列あり・user_version=1」の中間状態 DB でも openDb が成功し version 16 になる
+  // 「列あり・user_version=1」の中間状態 DB でも openDb が成功し version 17 になる
   const dbPath2 = tmpDbPath();
   try {
     const raw2 = new DatabaseSync(dbPath2);
@@ -393,12 +394,54 @@ test('T35_migration_v1_to_v16 旧スキーマDBがv16になり既存行が読め
 
     const db3 = openDb(dbPath2);
     const version3 = db3.prepare('PRAGMA user_version').get().user_version;
-    assert.equal(version3, 16);
+    assert.equal(version3, 17);
     db3.close();
   } finally {
     if (existsSync(dbPath2)) {
       await rm(dbPath2, { force: true });
     }
+  }
+});
+
+test('T35b_migration_v16_profile_roles 旧属性権限をmember権限と属性ロールへ分離する', async () => {
+  const dbPath = tmpDbPath();
+  try {
+    const seed = openDb(dbPath);
+    const createdAt = Date.now();
+    const userId = Number(seed.prepare(
+      `INSERT INTO users (nickname, password_hash, role, created_at)
+       VALUES ('legacy-adult', 'hash', 'adult', ?)`,
+    ).run(createdAt).lastInsertRowid);
+    seed.prepare(
+      `INSERT INTO rooms (name, allowed_roles, created_at) VALUES (?, ?, ?)`,
+    ).run('legacy-member-adult', '["member","adult"]', createdAt);
+    seed.prepare(
+      `INSERT INTO rooms (name, allowed_roles, created_at) VALUES (?, ?, ?)`,
+    ).run('legacy-member-only', '["member"]', createdAt);
+    seed.exec('PRAGMA user_version = 16');
+    seed.close();
+
+    const migrated = openDb(dbPath);
+    assert.equal(migrated.prepare('PRAGMA user_version').get().user_version, 17);
+    assert.equal(migrated.prepare('SELECT role FROM users WHERE id = ?').get(userId).role, 'member');
+    assert.deepEqual(
+      migrated.prepare('SELECT role FROM user_profile_roles WHERE user_id = ?').all(userId)
+        .map((row) => row.role),
+      ['adult'],
+    );
+    assert.equal(
+      migrated.prepare('SELECT allowed_roles FROM rooms WHERE name = ?')
+        .get('legacy-member-adult').allowed_roles,
+      '["adult"]',
+    );
+    assert.equal(
+      migrated.prepare('SELECT allowed_roles FROM rooms WHERE name = ?')
+        .get('legacy-member-only').allowed_roles,
+      null,
+    );
+    migrated.close();
+  } finally {
+    if (existsSync(dbPath)) await rm(dbPath, { force: true });
   }
 });
 

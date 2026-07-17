@@ -152,7 +152,7 @@ test('P02 roles: ownerがmemberをadminへ変更するとルーム管理権限�
   }
 });
 
-test('P02b display roles: 大人・子供・スタッフはmemberと同じ一般権限', async () => {
+test('P02b profile roles: 属性は権限と独立して複数付与でき、ownerは全属性を持つ', async () => {
   const ctx = await startServer();
   try {
     const owner = createClient(ctx.url);
@@ -162,17 +162,43 @@ test('P02b display roles: 大人・子供・スタッフはmemberと同じ一般
     const targetAuth = await register(
       target, 'role-target', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken),
     );
-    for (const role of ['adult', 'child', 'staff']) {
-      const update = target.next('users');
-      owner.send('set_role', { userId: targetAuth.user.id, role });
-      assert.equal((await update).users.find((user) => user.id === targetAuth.user.id).role, role);
-      const forbidden = target.next('error');
-      target.send('create_room', { name: `${role}-room` });
-      assert.equal((await forbidden).reason, 'forbidden');
-    }
+    assert.deepEqual(ownerAuth.user.profile_roles, ['adult', 'child', 'staff']);
+
+    let update = target.next('users');
+    owner.send('set_profile_roles', {
+      userId: targetAuth.user.id,
+      roles: ['staff', 'adult'],
+    });
+    let changed = (await update).users.find((user) => user.id === targetAuth.user.id);
+    assert.equal(changed.role, 'member');
+    assert.deepEqual(changed.profile_roles, ['adult', 'staff']);
+    await target.next('rooms');
+
+    update = target.next('users');
+    owner.send('set_role', { userId: targetAuth.user.id, role: 'admin' });
+    changed = (await update).users.find((user) => user.id === targetAuth.user.id);
+    assert.equal(changed.role, 'admin');
+    assert.deepEqual(changed.profile_roles, ['adult', 'staff']);
+    await target.next('rooms');
+
+    update = target.next('users');
+    owner.send('set_profile_roles', { userId: targetAuth.user.id, roles: ['child'] });
+    changed = (await update).users.find((user) => user.id === targetAuth.user.id);
+    assert.equal(changed.role, 'admin');
+    assert.deepEqual(changed.profile_roles, ['child']);
+    await target.next('rooms');
+    const roomsUpdate = target.next('rooms');
+    target.send('create_room', { name: 'admin-with-child-role' });
+    assert.ok((await roomsUpdate).rooms.some((room) => room.name === 'admin-with-child-role'));
+
     const badRole = owner.next('error');
-    owner.send('set_role', { userId: targetAuth.user.id, role: 'moderator' });
+    owner.send('set_role', { userId: targetAuth.user.id, role: 'adult' });
     assert.equal((await badRole).reason, 'bad_role');
+    for (const roles of [['adult', 'adult'], ['moderator'], 'adult']) {
+      const badProfileRoles = owner.next('error');
+      owner.send('set_profile_roles', { userId: targetAuth.user.id, roles });
+      assert.equal((await badProfileRoles).reason, 'bad_profile_roles');
+    }
     owner.close();
     target.close();
   } finally {
@@ -421,7 +447,7 @@ test('P07 ban: 一時BANは接続と全セッションを失効し、解除後�
   }
 });
 
-test('P08 ban hierarchy: adminは一般ロール、ownerはadminも永久BANでき、期限切れは自動解除', async () => {
+test('P08 ban hierarchy: adminはmember権限、ownerはadminも永久BANでき、期限切れは自動解除', async () => {
   const ctx = await startServer();
   try {
     const owner = createClient(ctx.url);
@@ -438,11 +464,11 @@ test('P08 ban hierarchy: adminは一般ロール、ownerはadminも永久BANで�
     await roleUpdate;
     await member.next('users');
     const childRoleUpdate = member.next('users');
-    owner.send('set_role', { userId: memberAuth.user.id, role: 'child' });
-    assert.equal(
-      (await childRoleUpdate).users.find((user) => user.id === memberAuth.user.id).role,
-      'child',
-    );
+    owner.send('set_profile_roles', { userId: memberAuth.user.id, roles: ['child'] });
+    const childAccount = (await childRoleUpdate).users
+      .find((user) => user.id === memberAuth.user.id);
+    assert.equal(childAccount.role, 'member');
+    assert.deepEqual(childAccount.profile_roles, ['child']);
 
     for (const targetId of [ownerAuth.user.id, adminAuth.user.id]) {
       const forbidden = admin.next('error');
@@ -669,7 +695,7 @@ test('P11 moderator hide: memberを拒否しadmin以上は投稿をDB保持の�
   }
 });
 
-test('P12 restricted rooms: 指定ロールだけに表示・入室を許可し、権限喪失時は全体へ戻す', async () => {
+test('P12 restricted rooms: 属性ロールだけで入室を判定し、ownerは全属性を持つ', async () => {
   const ctx = await startServer();
   try {
     const owner = createClient(ctx.url);
@@ -682,18 +708,26 @@ test('P12 restricted rooms: 指定ロールだけに表示・入室を許可し�
     const childAuth = await register(childSetup, 'room-child', 'password-123', invite);
     adultSetup.close();
     childSetup.close();
-    ctx.app.db.prepare('UPDATE users SET role = ? WHERE id = ?').run('adult', adultAuth.user.id);
-    ctx.app.db.prepare('UPDATE users SET role = ? WHERE id = ?').run('child', childAuth.user.id);
+    ctx.app.db.prepare(
+      'INSERT INTO user_profile_roles (user_id, role, created_at) VALUES (?, ?, ?)',
+    ).run(adultAuth.user.id, 'adult', Date.now());
+    ctx.app.db.prepare(
+      'INSERT INTO user_profile_roles (user_id, role, created_at) VALUES (?, ?, ?)',
+    ).run(childAuth.user.id, 'child', Date.now());
 
     const adult = createClient(ctx.url);
     const child = createClient(ctx.url);
     await Promise.all([adult.open(), child.open()]);
     const adultLogin = adult.next('auth_ok');
     adult.send('login', { username: 'room-adult', password: 'password-123' });
-    assert.equal((await adultLogin).user.role, 'adult');
+    const loggedInAdult = (await adultLogin).user;
+    assert.equal(loggedInAdult.role, 'member');
+    assert.deepEqual(loggedInAdult.profile_roles, ['adult']);
     const childLogin = child.next('auth_ok');
     child.send('login', { username: 'room-child', password: 'password-123' });
-    assert.equal((await childLogin).user.role, 'child');
+    const loggedInChild = (await childLogin).user;
+    assert.equal(loggedInChild.role, 'member');
+    assert.deepEqual(loggedInChild.profile_roles, ['child']);
 
     for (const allowedRoles of [['owner'], ['adult', 'adult'], 'adult']) {
       const invalid = owner.next('error');
@@ -722,11 +756,11 @@ test('P12 restricted rooms: 指定ロールだけに表示・入室を許可し�
     const usersChanged = adult.next('users');
     const evicted = adult.next('room_switched');
     const restrictedListRemoved = adult.next('rooms');
-    owner.send('set_role', { userId: adultAuth.user.id, role: 'child' });
-    assert.equal(
-      (await usersChanged).users.find((user) => user.id === adultAuth.user.id).role,
-      'child',
-    );
+    owner.send('set_profile_roles', { userId: adultAuth.user.id, roles: ['child'] });
+    const changedAdult = (await usersChanged).users
+      .find((user) => user.id === adultAuth.user.id);
+    assert.equal(changedAdult.role, 'member');
+    assert.deepEqual(changedAdult.profile_roles, ['child']);
     assert.notEqual((await evicted).roomId, ownerRestricted.id);
     assert.equal(
       (await restrictedListRemoved).rooms.some((room) => room.id === ownerRestricted.id),
@@ -736,6 +770,53 @@ test('P12 restricted rooms: 指定ロールだけに表示・入室を許可し�
     owner.close();
     adult.close();
     child.close();
+  } finally {
+    await stopServer(ctx);
+  }
+});
+
+test('P12b restricted admin: 管理者も付与された属性で入室判定する', async () => {
+  const ctx = await startServer();
+  try {
+    const owner = createClient(ctx.url);
+    const admin = createClient(ctx.url);
+    await Promise.all([owner.open(), admin.open()]);
+    const ownerAuth = await register(owner, 'restricted-admin-owner');
+    const adminAuth = await register(
+      admin, 'restricted-admin', 'password-123', await issueInvite(ctx, ownerAuth.sessionToken),
+    );
+
+    let usersUpdate = admin.next('users');
+    owner.send('set_role', { userId: adminAuth.user.id, role: 'admin' });
+    let changedAdmin = (await usersUpdate).users.find((user) => user.id === adminAuth.user.id);
+    assert.equal(changedAdmin.role, 'admin');
+    assert.deepEqual(changedAdmin.profile_roles, []);
+    await Promise.all([owner.next('rooms'), admin.next('rooms')]);
+
+    const ownerRooms = owner.next('rooms');
+    const adminRooms = admin.next('rooms');
+    owner.send('create_room', { name: '大人属性限定', allowedRoles: ['adult'] });
+    const room = (await ownerRooms).rooms.find((item) => item.name === '大人属性限定');
+    assert.equal((await adminRooms).rooms.some((item) => item.id === room.id), false);
+
+    const denied = admin.next('error');
+    admin.send('switch_room', { roomId: room.id });
+    assert.equal((await denied).reason, 'room_not_found');
+
+    usersUpdate = admin.next('users');
+    const grantedRooms = admin.next('rooms');
+    owner.send('set_profile_roles', { userId: adminAuth.user.id, roles: ['adult'] });
+    changedAdmin = (await usersUpdate).users.find((user) => user.id === adminAuth.user.id);
+    assert.equal(changedAdmin.role, 'admin');
+    assert.deepEqual(changedAdmin.profile_roles, ['adult']);
+    assert.ok((await grantedRooms).rooms.some((item) => item.id === room.id));
+
+    const switched = admin.next('room_switched');
+    admin.send('switch_room', { roomId: room.id });
+    assert.equal((await switched).roomId, room.id);
+
+    owner.close();
+    admin.close();
   } finally {
     await stopServer(ctx);
   }

@@ -174,6 +174,24 @@
     }[role] || role;
   }
 
+  const profileRoleValues = ['adult', 'child', 'staff'];
+
+  function profileRoles(user) {
+    return user?.role === 'owner' ? [...profileRoleValues] : (user?.profile_roles || []);
+  }
+
+  function makeRoleBadges(user) {
+    const badges = document.createElement('span');
+    badges.className = 'profile-role-badges';
+    for (const value of profileRoles(user)) {
+      const badge = document.createElement('span');
+      badge.className = `profile-role-badge role-${value}`;
+      badge.textContent = formatRole(value);
+      badges.append(badge);
+    }
+    return badges;
+  }
+
   function showToast(text) {
     const toast = $('toast');
     toast.textContent = text;
@@ -793,6 +811,7 @@
     too_large: '送信内容が大きすぎます。',
     bad_attachment: '添付ファイルを利用できません。もう一度選択してください。',
     bad_profile: '表示名または自己紹介を確認してください。',
+    bad_profile_roles: '属性ロールの指定を確認してください。',
     bad_avatar: 'その画像はアイコンに設定できません。',
     empty_message: '本文を空にはできません。',
     message_not_found: 'メッセージが見つかりません。',
@@ -872,7 +891,7 @@
         const lock = document.createElement('span');
         lock.className = 'channel-lock';
         lock.textContent = '🔒';
-        lock.title = '入室可能: ' + room.allowedRoles.join(', ');
+        lock.title = '入室可能: ' + room.allowedRoles.map(formatRole).join('、');
         button.append(lock);
       }
       button.addEventListener('click', () => send('switch_room', { roomId: room.id }));
@@ -954,7 +973,7 @@
       const role = document.createElement('span');
       role.className = 'role-badge';
       role.textContent = formatRole(user.role);
-      copy.append(name, role);
+      copy.append(name, role, makeRoleBadges(user));
       if (isUserBanned(user)) {
         const status = document.createElement('span');
         status.className = 'ban-status';
@@ -975,7 +994,7 @@
       if (me?.role === 'owner' && user.role !== 'owner') {
         const select = document.createElement('select');
         select.className = 'role-select';
-        for (const value of ['member', 'adult', 'child', 'staff', 'admin']) {
+        for (const value of ['member', 'admin']) {
           const option = document.createElement('option');
           option.value = value;
           option.textContent = formatRole(value);
@@ -985,6 +1004,29 @@
         select.addEventListener('click', (event) => event.stopPropagation());
         select.addEventListener('change', () => send('set_role', { userId: user.id, role: select.value }));
         actions.append(select);
+
+        const roleControls = document.createElement('fieldset');
+        roleControls.className = 'profile-role-controls';
+        roleControls.title = '属性ロール';
+        roleControls.addEventListener('click', (event) => event.stopPropagation());
+        const selectedRoles = new Set(profileRoles(user));
+        for (const value of profileRoleValues) {
+          const label = document.createElement('label');
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.value = value;
+          checkbox.checked = selectedRoles.has(value);
+          checkbox.setAttribute('aria-label', formatRole(value));
+          checkbox.addEventListener('change', () => {
+            const roles = [...roleControls.querySelectorAll('input:checked')]
+              .map((input) => input.value);
+            send('set_profile_roles', { userId: user.id, roles });
+          });
+          const shortLabel = { adult: '大', child: '子', staff: '職' }[value];
+          label.append(checkbox, shortLabel);
+          roleControls.append(label);
+        }
+        actions.append(roleControls);
       }
       if (canModerateUser(user)) {
         const banButton = document.createElement('button');
@@ -1032,12 +1074,12 @@
   function canModerateUser(user) {
     if (!me || !user || me.id === user.id || user.role === 'owner') return false;
     return me.role === 'owner' || (
-      me.role === 'admin' && ['member', 'adult', 'child', 'staff'].includes(user.role)
+      me.role === 'admin' && user.role === 'member'
     );
   }
 
   function roleOrder(role) {
-    return { owner: 0, admin: 1, staff: 2, adult: 3, member: 4, child: 5 }[role] ?? 6;
+    return { owner: 0, admin: 1, member: 2 }[role] ?? 3;
   }
   function dateKey(timestamp) { return new Date(timestamp).toLocaleDateString('en-CA'); }
   function formatDate(timestamp) {
@@ -1606,6 +1648,7 @@
     $('profile-name').textContent = accountName(user);
     $('profile-handle').textContent = `@${user.username}`;
     $('profile-role').textContent = formatRole(user.role);
+    $('profile-roles').replaceChildren(makeRoleBadges(user));
     $('profile-bio-view').textContent = user.bio || '自己紹介はまだありません。';
     $('profile-display-name-input').value = user.display_name || '';
     $('profile-bio-input').value = user.bio || '';

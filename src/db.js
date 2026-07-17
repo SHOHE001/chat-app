@@ -6,6 +6,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 const DEFAULT_ROOM_NAME = '全体';
 const ANNOUNCEMENT_ROOM_NAME = 'お知らせ';
+const PROFILE_ROLES = Object.freeze(['adult', 'child', 'staff']);
+const ASSIGNABLE_AUTHORITIES = new Set(['admin', 'member']);
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -22,6 +24,12 @@ CREATE TABLE IF NOT EXISTS users (
   posting_blocked_at INTEGER,
   posting_blocked_reason TEXT,
   created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_profile_roles (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('adult', 'child', 'staff')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, role)
 );
 CREATE TABLE IF NOT EXISTS rooms (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,11 +188,12 @@ export function openDb(path) {
   // 11=ロール限定チャンネル、12=ユーザー別チャンネル通知設定（既定オン）、
   // 13=チャンネル通知を既定オフへ変更、14=タイムラインのメッセージ返信、
   // 15=管理者だけが投稿できるお知らせチャンネル、
-  // 16=お知らせ通知を既定ONにし、利用者別OFFを保存。
+  // 16=お知らせ通知を既定ONにし、利用者別OFFを保存、
+  // 17=権限（owner/admin/member）と複数の属性ロールを分離。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 16');
-    userVersion = 16;
+    db.exec('PRAGMA user_version = 17');
+    userVersion = 17;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -541,6 +550,34 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 16) {
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS user_profile_roles (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK (role IN ('adult', 'child', 'staff')),
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (user_id, role)
+        );
+        INSERT OR IGNORE INTO user_profile_roles (user_id, role, created_at)
+        SELECT id, role, created_at FROM users WHERE role IN ('adult', 'child', 'staff');
+        UPDATE users SET role = 'member' WHERE role IN ('adult', 'child', 'staff');
+        UPDATE rooms SET allowed_roles = CASE
+          WHEN allowed_roles = '["member"]' THEN NULL
+          ELSE REPLACE(REPLACE(allowed_roles, '"member",', ''), ',"member"', '')
+        END
+        WHERE allowed_roles LIKE '%"member"%';
+      `);
+      db.exec('PRAGMA user_version = 17');
+      db.exec('COMMIT');
+      userVersion = 17;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_id)');
@@ -562,6 +599,7 @@ export function openDb(path) {
     'CREATE INDEX IF NOT EXISTS idx_disabled_room_notifications_room ON disabled_room_notifications(room_id)',
   );
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_banned_until ON users(banned_until)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_user_profile_roles_role ON user_profile_roles(role)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_created ON message_reports(created_at DESC)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_status ON message_reports(status, ai_status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_moderation_reviews_target ON moderation_reviews(target_kind, target_message_id)');
@@ -1131,7 +1169,15 @@ export function upsertUser(db, nickname) {
   );
 }
 
-function mapAccount(row, includePasswordHash = false) {
+function accountProfileRoles(db, userId, authority) {
+  if (authority === 'owner') return [...PROFILE_ROLES];
+  return db
+    .prepare('SELECT role FROM user_profile_roles WHERE user_id = ? ORDER BY role ASC')
+    .all(userId)
+    .map((row) => row.role);
+}
+
+function mapAccount(db, row, includePasswordHash = false) {
   if (!row) return undefined;
   const account = {
     id: Number(row.id),
@@ -1148,6 +1194,7 @@ function mapAccount(row, includePasswordHash = false) {
         }
       : null,
     role: row.role,
+    profile_roles: accountProfileRoles(db, Number(row.id), row.role),
     banned_until: row.banned_until === null || row.banned_until === undefined
       ? null
       : Number(row.banned_until),
@@ -1207,6 +1254,7 @@ export function createAccount(db, username, passwordHash) {
       bio: '',
       avatar: null,
       role,
+      profile_roles: role === 'owner' ? [...PROFILE_ROLES] : [],
       banned_until: null,
       banned_at: null,
       banned_by_user_id: null,
@@ -1223,6 +1271,7 @@ export function createAccount(db, username, passwordHash) {
 export function getAccountByUsername(db, username) {
   clearExpiredAccountBans(db);
   return mapAccount(
+    db,
     db
       .prepare(
         `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio,
@@ -1251,23 +1300,52 @@ export function listAccounts(db) {
        WHERE u.password_hash IS NOT NULL ORDER BY u.nickname COLLATE NOCASE ASC`,
     )
     .all()
-    .map((row) => mapAccount(row));
+    .map((row) => mapAccount(db, row));
 }
 
 export function hasRegisteredAccounts(db) {
   return Boolean(db.prepare('SELECT 1 FROM users WHERE password_hash IS NOT NULL LIMIT 1').get());
 }
 
-export function setAccountRole(db, userId, role) {
+export function setAccountAuthority(db, userId, role) {
+  if (!ASSIGNABLE_AUTHORITIES.has(role)) return 0;
   const info = db
     .prepare("UPDATE users SET role = ? WHERE id = ? AND role != 'owner' AND password_hash IS NOT NULL")
     .run(role, userId);
   return Number(info.changes);
 }
 
+export function setAccountProfileRoles(db, userId, roles) {
+  if (
+    !Array.isArray(roles) ||
+    roles.some((role) => !PROFILE_ROLES.includes(role)) ||
+    new Set(roles).size !== roles.length
+  ) return 0;
+  const account = db
+    .prepare('SELECT role FROM users WHERE id = ? AND password_hash IS NOT NULL')
+    .get(userId);
+  if (!account || account.role === 'owner') return 0;
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('DELETE FROM user_profile_roles WHERE user_id = ?').run(userId);
+    const insert = db.prepare(
+      'INSERT INTO user_profile_roles (user_id, role, created_at) VALUES (?, ?, ?)',
+    );
+    const createdAt = Date.now();
+    for (const role of roles) insert.run(userId, role, createdAt);
+    db.exec('COMMIT');
+    return 1;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 export function getAccountById(db, userId) {
   clearExpiredAccountBans(db);
   return mapAccount(
+    db,
     db
       .prepare(
         `SELECT u.id, u.nickname, u.password_hash, u.role, u.display_name, u.bio,
@@ -1385,6 +1463,7 @@ export function createSession(db, tokenHash, userId, expiresAt) {
 export function getAccountBySession(db, tokenHash, now = Date.now()) {
   clearExpiredAccountBans(db, now);
   return mapAccount(
+    db,
     db
       .prepare(
         `SELECT u.id, u.nickname, u.role, u.display_name, u.bio,
@@ -1629,6 +1708,7 @@ export function listPushSubscriptions(db, excludeUserId = null, roomId = null) {
   return rows.map((row) => ({
     user_id: Number(row.user_id),
     role: row.role,
+    profile_roles: accountProfileRoles(db, Number(row.user_id), row.role),
     notifications_enabled: row.room_kind === 'announcement'
       ? row.disabled_room_id === null
       : row.enabled_room_id !== null,

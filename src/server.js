@@ -33,7 +33,8 @@ import {
   getAccountById,
   hasRegisteredAccounts,
   listAccounts,
-  setAccountRole,
+  setAccountAuthority,
+  setAccountProfileRoles,
   setAccountBan,
   clearAccountBan,
   clearPostingBlock,
@@ -102,8 +103,8 @@ const REPORT_CATEGORIES = new Set([
   'spam',
   'other',
 ]);
-const ASSIGNABLE_ROLES = new Set(['admin', 'member', 'adult', 'child', 'staff']);
-const GENERAL_ROLES = new Set(['member', 'adult', 'child', 'staff']);
+const ASSIGNABLE_AUTHORITIES = new Set(['admin', 'member']);
+const PROFILE_ROLES = new Set(['adult', 'child', 'staff']);
 
 const SAFE_RASTER_MIME_TYPES = new Set([
   'image/jpeg',
@@ -714,8 +715,10 @@ export function createChatServer({
   function canAccessRoom(user, room) {
     if (!room) return false;
     if (!room.allowed_roles?.length) return true;
-    if (user && ['owner', 'admin'].includes(user.role)) return true;
-    return Boolean(user && room.allowed_roles.includes(user.role));
+    if (user?.role === 'owner') return true;
+    return Boolean(
+      user && room.allowed_roles.some((role) => user.profile_roles?.includes(role)),
+    );
   }
 
   function roomsPayload(user) {
@@ -1412,7 +1415,7 @@ export function createChatServer({
   function canModerateUser(actor, target) {
     if (!actor || !target || actor.id === target.id || target.role === 'owner') return false;
     if (actor.role === 'owner') return true;
-    return actor.role === 'admin' && GENERAL_ROLES.has(target.role);
+    return actor.role === 'admin' && target.role === 'member';
   }
 
   function isAccountBanned(user, now = Date.now()) {
@@ -1810,11 +1813,36 @@ export function createChatServer({
           return;
         }
         const userId = parseRoomId(parsed.userId);
-        if (!userId || !ASSIGNABLE_ROLES.has(parsed.role)) {
+        if (!userId || !ASSIGNABLE_AUTHORITIES.has(parsed.role)) {
           sendError(ws, 'bad_role');
           return;
         }
-        if (!setAccountRole(db, userId, parsed.role)) {
+        if (!setAccountAuthority(db, userId, parsed.role)) {
+          sendError(ws, 'user_not_found');
+          return;
+        }
+        broadcastUsers();
+        return;
+      }
+
+      if (parsed.type === 'set_profile_roles') {
+        if (ws.user?.role !== 'owner') {
+          sendError(ws, 'forbidden');
+          return;
+        }
+        const userId = parseRoomId(parsed.userId);
+        if (
+          !userId ||
+          !Array.isArray(parsed.roles) ||
+          parsed.roles.some((role) => !PROFILE_ROLES.has(role)) ||
+          new Set(parsed.roles).size !== parsed.roles.length
+        ) {
+          sendError(ws, 'bad_profile_roles');
+          return;
+        }
+        const roles = [...parsed.roles]
+          .sort((a, b) => [...PROFILE_ROLES].indexOf(a) - [...PROFILE_ROLES].indexOf(b));
+        if (!setAccountProfileRoles(db, userId, roles)) {
           sendError(ws, 'user_not_found');
           return;
         }
@@ -1941,7 +1969,7 @@ export function createChatServer({
           parsed.allowedRoles !== undefined &&
           (
             !Array.isArray(parsed.allowedRoles) ||
-            parsed.allowedRoles.some((role) => !GENERAL_ROLES.has(role)) ||
+            parsed.allowedRoles.some((role) => !PROFILE_ROLES.has(role)) ||
             new Set(parsed.allowedRoles).size !== parsed.allowedRoles.length
           )
         ) {
@@ -1949,7 +1977,7 @@ export function createChatServer({
           return;
         }
         const allowedRoles = [...(parsed.allowedRoles || [])]
-          .sort((a, b) => [...GENERAL_ROLES].indexOf(a) - [...GENERAL_ROLES].indexOf(b));
+          .sort((a, b) => [...PROFILE_ROLES].indexOf(a) - [...PROFILE_ROLES].indexOf(b));
         try {
           createRoom(db, name, allowedRoles);
         } catch (err) {
