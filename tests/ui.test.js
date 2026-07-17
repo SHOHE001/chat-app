@@ -214,7 +214,8 @@ test('UI14 profile roles: 権限と複数属性ロールを別々に選択・表
   assert.match(app, /const profileRoleValues = \['adult', 'child', 'staff'\]/);
   assert.match(app, /for \(const value of \['member', 'admin'\]\)/);
   assert.match(app, /send\('set_profile_roles', \{ userId: user\.id, roles \}\)/);
-  assert.match(app, /user\?\.role === 'owner' \? \[\.\.\.profileRoleValues\]/);
+  assert.match(app, /return user\?\.profile_roles \|\| \[\]/);
+  assert.doesNotMatch(app, /user\?\.role === 'owner' \? \[\.\.\.profileRoleValues\]/);
   assert.match(css, /\.profile-role-controls/);
   assert.match(css, /\.profile-role-badge/);
 });

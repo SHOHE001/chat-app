@@ -1170,7 +1170,7 @@ export function upsertUser(db, nickname) {
 }
 
 function accountProfileRoles(db, userId, authority) {
-  if (authority === 'owner') return [...PROFILE_ROLES];
+  if (authority === 'owner') return [];
   return db
     .prepare('SELECT role FROM user_profile_roles WHERE user_id = ? ORDER BY role ASC')
     .all(userId)
@@ -1254,7 +1254,7 @@ export function createAccount(db, username, passwordHash) {
       bio: '',
       avatar: null,
       role,
-      profile_roles: role === 'owner' ? [...PROFILE_ROLES] : [],
+      profile_roles: [],
       banned_until: null,
       banned_at: null,
       banned_by_user_id: null,

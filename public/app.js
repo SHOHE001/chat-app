@@ -177,7 +177,7 @@
   const profileRoleValues = ['adult', 'child', 'staff'];
 
   function profileRoles(user) {
-    return user?.role === 'owner' ? [...profileRoleValues] : (user?.profile_roles || []);
+    return user?.profile_roles || [];
   }
 
   function makeRoleBadges(user) {
