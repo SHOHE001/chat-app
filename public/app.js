@@ -140,9 +140,23 @@
 
   function makeAvatar(name, small = false, avatarUrl = null) {
     const avatar = document.createElement('div');
-    avatar.className = `avatar${small ? ' small' : ''}`;
+    avatar.className = 'avatar' + (small ? ' small' : '');
     avatar.style.setProperty('--avatar-hue', avatarHue(name));
     setAvatar(avatar, name, avatarUrl);
+    return avatar;
+  }
+
+  function makeProfileAvatar(user, small = false) {
+    const avatar = document.createElement('button');
+    avatar.type = 'button';
+    avatar.className = 'avatar profile-trigger' + (small ? ' small' : '');
+    avatar.style.setProperty('--avatar-hue', avatarHue(user.username));
+    avatar.setAttribute('aria-label', accountName(user) + 'のプロフィールを表示');
+    setAvatar(avatar, user.username, user.avatar?.url);
+    avatar.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openProfile(user, false);
+    });
     return avatar;
   }
 
@@ -965,7 +979,7 @@
     for (const user of sorted) {
       const item = document.createElement('div');
       item.className = 'member';
-      item.append(makeAvatar(user.username, true, user.avatar?.url));
+      item.append(makeProfileAvatar(user, true));
       const copy = document.createElement('div');
       copy.className = 'member-copy';
       const name = document.createElement('strong');
@@ -1380,7 +1394,7 @@
     row.dataset.shortTime = formatTime(message.created_at);
     row.title = grouped ? formatExact(message.created_at) : '';
     const messageUser = userForMessage(message);
-    const avatar = makeAvatar(message.author, false, messageUser?.avatar?.url);
+    const avatar = messageUser ? makeProfileAvatar(messageUser) : makeAvatar(message.author);
     avatar.classList.add('message-avatar');
     const content = document.createElement('div');
     content.className = 'message-content';
@@ -1726,7 +1740,7 @@
       const row = document.createElement('article');
       row.className = 'thread-message';
       const messageUser = userForMessage(message);
-      row.append(makeAvatar(message.author, false, messageUser?.avatar?.url));
+      row.append(messageUser ? makeProfileAvatar(messageUser) : makeAvatar(message.author));
       const meta = document.createElement('div');
       meta.className = 'message-meta';
       const author = document.createElement('strong');
@@ -2006,6 +2020,7 @@
   });
   $('report-inbox-close').addEventListener('click', () => reportInboxDialog.close());
   $('report-inbox-done').addEventListener('click', () => reportInboxDialog.close());
+  $('my-avatar').addEventListener('click', () => openProfile(me, false));
   $('profile-button').addEventListener('click', () => openProfile(me, true));
   $('profile-avatar-button').addEventListener('click', () => profileAvatarInput.click());
   profileAvatarInput.addEventListener('change', () => uploadProfileAvatar(profileAvatarInput.files?.[0]));

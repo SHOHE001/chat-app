@@ -91,6 +91,8 @@ input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
 
 .avatar { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #fff; background: hsl(var(--avatar-hue, 220) 55% 45%); font-size: 15px; font-weight: 700; user-select: none; }
 .avatar.small { width: 32px; height: 32px; font-size: 12px; }
+.profile-trigger { padding: 0; border: 0; cursor: pointer; }
+.profile-trigger:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .avatar::after { content: ""; position: absolute; }
 .chat-column { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--chat); touch-action: pan-y pinch-zoom; }
 .topbar { display: flex; align-items: center; gap: 8px; padding-right: max(var(--content-gutter), env(safe-area-inset-right, 0px)); padding-left: max(var(--content-gutter), env(safe-area-inset-left, 0px)); }

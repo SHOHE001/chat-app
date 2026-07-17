@@ -253,3 +253,11 @@ test('UI19 announcements: 専用アイコンと一般ユーザー向け読み取
   assert.match(app, /アプリの更新内容や運営からのお知らせを掲載します/);
   assert.match(app, /announcement_read_only/);
 });
+test('UI21 profile avatars: 自分・メンバー・投稿・スレッドのアイコンからプロフィールを表示する', () => {
+  assert.ok(html.includes('id="my-avatar" class="avatar small profile-trigger" type="button"'));
+  assert.ok(app.includes('function makeProfileAvatar(user, small = false)'));
+  assert.ok(app.includes('item.append(makeProfileAvatar(user, true))'));
+  assert.ok(app.includes('messageUser ? makeProfileAvatar(messageUser) : makeAvatar(message.author)'));
+  assert.ok(app.includes("$('my-avatar').addEventListener('click', () => openProfile(me, false))"));
+  assert.ok(css.includes(".profile-trigger { padding: 0; border: 0; cursor: pointer; }"));
+});
