@@ -830,11 +830,26 @@ test('P14 announcements: 全員が閲覧でき、owner/adminだけが投稿で�
     const announcement = ownerState.rooms.find((room) => room.kind === 'announcement');
     assert.equal(announcement.name, 'お知らせ');
     assert.deepEqual(announcement.allowedRoles, []);
-    assert.equal(announcement.notificationsEnabled, false);
+    assert.equal(announcement.notificationsEnabled, true);
 
     const memberStatePromise = member.next('state');
     member.send('get_state');
-    assert.ok((await memberStatePromise).rooms.some((room) => room.id === announcement.id));
+    const memberAnnouncement = (await memberStatePromise).rooms
+      .find((room) => room.id === announcement.id);
+    assert.equal(memberAnnouncement.notificationsEnabled, true);
+
+    const memberMuted = member.next('rooms');
+    member.send('set_room_notification', { roomId: announcement.id, enabled: false });
+    assert.equal(
+      (await memberMuted).rooms.find((room) => room.id === announcement.id).notificationsEnabled,
+      false,
+    );
+    assert.equal(
+      ctx.app.db.prepare(
+        'SELECT COUNT(*) AS count FROM disabled_room_notifications WHERE room_id = ?',
+      ).get(announcement.id).count,
+      1,
+    );
 
     const memberSwitched = member.next('room_switched');
     member.send('switch_room', { roomId: announcement.id });

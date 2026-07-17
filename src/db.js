@@ -103,6 +103,12 @@ CREATE TABLE IF NOT EXISTS enabled_room_notifications (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, room_id)
 );
+CREATE TABLE IF NOT EXISTS disabled_room_notifications (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, room_id)
+);
 CREATE TABLE IF NOT EXISTS message_reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   reporter_user_id INTEGER NOT NULL REFERENCES users(id),
@@ -173,11 +179,12 @@ export function openDb(path) {
   // 9=通報スナップショットとAI審査状態、10=AI巡回・非表示・投稿停止、
   // 11=ロール限定チャンネル、12=ユーザー別チャンネル通知設定（既定オン）、
   // 13=チャンネル通知を既定オフへ変更、14=タイムラインのメッセージ返信、
-  // 15=管理者だけが投稿できるお知らせチャンネル。
+  // 15=管理者だけが投稿できるお知らせチャンネル、
+  // 16=お知らせ通知を既定ONにし、利用者別OFFを保存。
   let { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
   if (userVersion === 0) {
-    db.exec('PRAGMA user_version = 15');
-    userVersion = 15;
+    db.exec('PRAGMA user_version = 16');
+    userVersion = 16;
   } else if (userVersion === 1) {
     // v1→v2: transaction で括り、途中失敗時に「列だけ増えて version=1」の
     // 再実行不能な中間状態（ALTER 再実行が duplicate column で毎回失敗）を防ぐ。
@@ -514,6 +521,26 @@ export function openDb(path) {
     }
   }
 
+  if (userVersion === 15) {
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS disabled_room_notifications (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (user_id, room_id)
+        );
+      `);
+      db.exec('PRAGMA user_version = 16');
+      db.exec('COMMIT');
+      userVersion = 16;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // index は列の存在が確定した後（全 version パス共通）に作成する。
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(thread_root_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_id)');
@@ -530,6 +557,9 @@ export function openDb(path) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)');
   db.exec(
     'CREATE INDEX IF NOT EXISTS idx_enabled_room_notifications_room ON enabled_room_notifications(room_id)',
+  );
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_disabled_room_notifications_room ON disabled_room_notifications(room_id)',
   );
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_banned_until ON users(banned_until)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_message_reports_created ON message_reports(created_at DESC)');
@@ -1574,24 +1604,34 @@ export function deletePushSubscriptionsForUser(db, userId) {
 export function listPushSubscriptions(db, excludeUserId = null, roomId = null) {
   const rows = excludeUserId === null
     ? db.prepare(`
-        SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role, ern.room_id AS enabled_room_id
+        SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role, r.kind AS room_kind,
+               ern.room_id AS enabled_room_id, drn.room_id AS disabled_room_id
         FROM push_subscriptions p JOIN users u ON u.id = p.user_id
+        LEFT JOIN rooms r ON r.id = ?
         LEFT JOIN enabled_room_notifications ern
           ON ern.user_id = p.user_id AND ern.room_id = ?
-      `).all(roomId)
+        LEFT JOIN disabled_room_notifications drn
+          ON drn.user_id = p.user_id AND drn.room_id = ?
+      `).all(roomId, roomId, roomId)
     : db
       .prepare(
-        `SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role, ern.room_id AS enabled_room_id
+        `SELECT p.endpoint, p.user_id, p.p256dh, p.auth, u.role, r.kind AS room_kind,
+                ern.room_id AS enabled_room_id, drn.room_id AS disabled_room_id
          FROM push_subscriptions p JOIN users u ON u.id = p.user_id
+         LEFT JOIN rooms r ON r.id = ?
          LEFT JOIN enabled_room_notifications ern
            ON ern.user_id = p.user_id AND ern.room_id = ?
+         LEFT JOIN disabled_room_notifications drn
+           ON drn.user_id = p.user_id AND drn.room_id = ?
          WHERE p.user_id != ?`,
       )
-      .all(roomId, excludeUserId);
+      .all(roomId, roomId, roomId, excludeUserId);
   return rows.map((row) => ({
     user_id: Number(row.user_id),
     role: row.role,
-    notifications_enabled: row.enabled_room_id !== null,
+    notifications_enabled: row.room_kind === 'announcement'
+      ? row.disabled_room_id === null
+      : row.enabled_room_id !== null,
     endpoint: row.endpoint,
     keys: { p256dh: row.p256dh, auth: row.auth },
   }));
@@ -1606,7 +1646,36 @@ export function listNotificationEnabledRoomIds(db, userId) {
     .map((row) => Number(row.room_id));
 }
 
+export function listNotificationDisabledRoomIds(db, userId) {
+  return db
+    .prepare(
+      'SELECT room_id FROM disabled_room_notifications WHERE user_id = ? ORDER BY room_id',
+    )
+    .all(userId)
+    .map((row) => Number(row.room_id));
+}
+
 export function setRoomNotificationEnabled(db, userId, roomId, enabled) {
+  const room = getRoomById(db, roomId);
+  if (room?.kind === 'announcement') {
+    db.prepare(
+      'DELETE FROM enabled_room_notifications WHERE user_id = ? AND room_id = ?',
+    ).run(userId, roomId);
+    if (enabled) {
+      db.prepare(
+        'DELETE FROM disabled_room_notifications WHERE user_id = ? AND room_id = ?',
+      ).run(userId, roomId);
+    } else {
+      db.prepare(
+        `INSERT INTO disabled_room_notifications (user_id, room_id, created_at) VALUES (?, ?, ?)
+         ON CONFLICT(user_id, room_id) DO NOTHING`,
+      ).run(userId, roomId, Date.now());
+    }
+    return;
+  }
+  db.prepare(
+    'DELETE FROM disabled_room_notifications WHERE user_id = ? AND room_id = ?',
+  ).run(userId, roomId);
   if (!enabled) {
     db.prepare(
       'DELETE FROM enabled_room_notifications WHERE user_id = ? AND room_id = ?',
