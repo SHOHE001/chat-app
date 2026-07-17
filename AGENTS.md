@@ -17,7 +17,7 @@
 - 添付本体は`DB_PATH`と同階層の`uploads/`へ保存する。上限100MB、1メッセージ1件。JPEG/PNG/GIF/WebP/AVIFと
   MP4/WebM/QuickTimeだけをinline配信し、HTML、SVG、その他はoctet-stream＋attachmentにする。アバターも安全な
   ラスター画像だけを許可する。
-- `public/` は素の HTML/CSS/JavaScript。HTTPS 配下ではクライアントが自動的に `wss:` を使う。
+- `public/` は素の HTML/CSS/JavaScript。HTTPS 配下ではクライアントが自動的に `wss:` を使う。PCの3カラム幅、本文余白、読み幅、添付表示はviewportへ追従させ、固定px幅へ戻さない。
 - Web Push購読と永続VAPID鍵をSQLiteへ保存し、Service WorkerとWeb App Manifestでモバイル通知を試作している。
 - gen8では`chat-app.service`により常駐する。公開安全化後の標準配置はコード`/opt/chat-app/current`、状態
   `/var/lib/chat-app`、秘密設定`/etc/chat-app/chat-app.env`で、Webは専用`chat-app`ユーザー、AI巡回は`shohei`で動かす。
@@ -121,6 +121,7 @@ Rust版へ持ち込むかドッグフーディングで判断する。
 優先して確認する項目:
 
 - PC・スマホ間のリアルタイム送受信と再接続
+- PCでウィンドウを狭幅・標準・ワイドへ変更し、3カラム、本文、入力欄、添付、ダイアログが欠けずに追従すること
 - チャンネル切り替えと独立スレッドの作成・返信
 - メッセージの日時、連投グルーピング、直接返信、メンション、リアクション
 - PCホバー／スマホ長押しでのメッセージ編集・削除と「編集済み」表示
