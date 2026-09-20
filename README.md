@@ -213,7 +213,7 @@ git config core.hooksPath .githooks
 
 - `pre-commit`: 差分の空白エラーを検査し、`.env`、DB、アップロード本体などローカルデータの誤コミットを拒否する。
 - `pre-push`: `npm test`を全件実行し、ref削除とnon-fast-forward pushを拒否する。
-- GitHubの`main`ブランチ保護: force pushとブランチ削除を管理者にも禁止している。PRとCIの必須化は初回CI成功後に設定し、readbackする。
+- GitHubの`main`ブランチ保護: PRとGitHub Actionsの`test`成功を必須にし、force pushとブランチ削除を管理者にも禁止する。
 
 最新の`main`から作業branchを作り、意味のある単位でcommitして、作業branchへのpush、PR、CI確認、通常mergeの順で進める。
 default branchへの直接push、履歴書き換え、保護設定の弱体化、`--no-verify`によるhook回避は行わない。

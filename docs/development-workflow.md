@@ -20,6 +20,6 @@ Projectやネットワークの権限不足時は、可能な範囲の開発を�
 - Issue/PR templates: `.github/ISSUE_TEMPLATE/` と `.github/pull_request_template.md` を設定済み。
 - CI: `.github/workflows/ci.yml` の `test` jobでNode `.nvmrc`、`npm ci`、`npm test`を検証する。
 - Git hooks: `.githooks/pre-commit` と `.githooks/pre-push` を使用し、`core.hooksPath=.githooks`で有効化する。
-- Branch protection: `main`は管理者を含めforce pushと削除を禁止している。PRと`test`の必須化は初回CI成功後に設定し、readbackする。
+- Branch protection: `main`はPR、GitHub Actionsの`test`成功、会話解決を必須とし、管理者を含めforce pushと削除を禁止する。approval数は0。
 - Project: [Development HQ](https://github.com/users/SHOHE001/projects/1)を使用する。
 - Blocker: `blocked` labelとblocker Issue Formを設定済み。
